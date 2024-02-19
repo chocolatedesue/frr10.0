@@ -8,6 +8,7 @@
 #define __SHARP_GLOBAL_H__
 
 #include "lib/srv6.h"
+#include "lib/tvr_db.h"
 
 DECLARE_MGROUP(SHARPD);
 
@@ -59,6 +60,9 @@ struct sharp_global {
 
 	/* list of sharp_srv6_locator */
 	struct list *srv6_locators;
+
+	/* Time Variant Routing Database */
+	struct tvr_db *db;
 };
 
 extern struct sharp_global sg;
