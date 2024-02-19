@@ -63,6 +63,7 @@ static void sharp_global_init(void)
 	sg.nhs->del = (void (*)(void *))sharp_nh_tracker_free;
 	sg.ted = NULL;
 	sg.srv6_locators = list_new();
+	sg.db = NULL;
 }
 
 static void sharp_global_destroy(void)

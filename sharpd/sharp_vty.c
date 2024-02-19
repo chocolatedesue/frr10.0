@@ -18,6 +18,8 @@
 #include "link_state.h"
 #include "cspf.h"
 #include "tc.h"
+#include "tvr_db.h"
+#include "tvr_spf.h"
 
 #include "sharpd/sharp_globals.h"
 #include "sharpd/sharp_zebra.h"
@@ -202,7 +204,7 @@ DEFPY (install_routes_data_dump,
 DEFPY (install_routes,
        install_routes_cmd,
        "sharp install routes [vrf NAME$vrf_name]\
-	  <A.B.C.D$start4|X:X::X:X$start6>\
+	  <A.B.C.D/M$start4|X:X::X:X/M$start6>\
 	  <nexthop <A.B.C.D$nexthop4|X:X::X:X$nexthop6>|\
 	   nexthop-group NHGNAME$nexthop_group>\
 	  [backup$backup <A.B.C.D$backup_nexthop4|X:X::X:X$backup_nexthop6>] \
@@ -254,14 +256,14 @@ DEFPY (install_routes,
 	memset(&sg.r.backup_nhop, 0, sizeof(sg.r.nhop));
 	memset(&sg.r.backup_nhop_group, 0, sizeof(sg.r.nhop_group));
 
-	if (start4.s_addr != INADDR_ANY) {
-		prefix.family = AF_INET;
-		prefix.prefixlen = IPV4_MAX_BITLEN;
-		prefix.u.prefix4 = start4;
+	if (start4_str != NULL) {
+		prefix.family = start4->family;
+		prefix.prefixlen = start4->prefixlen;
+		prefix.u.prefix4 = start4->prefix;
 	} else {
-		prefix.family = AF_INET6;
-		prefix.prefixlen = IPV6_MAX_BITLEN;
-		prefix.u.prefix6 = start6;
+		prefix.family = start6->family;
+		prefix.prefixlen = start6->prefixlen;
+		prefix.u.prefix6 = start6->prefix;
 	}
 	sg.r.orig_prefix = prefix;
 
@@ -582,7 +584,7 @@ DEFPY(vrf_label, vrf_label_cmd,
 
 DEFPY (remove_routes,
        remove_routes_cmd,
-       "sharp remove routes [vrf NAME$vrf_name] <A.B.C.D$start4|X:X::X:X$start6> (1-1000000)$routes [instance (0-255)$instance]",
+       "sharp remove routes [vrf NAME$vrf_name] <A.B.C.D/M$start4|X:X::X:X/M$start6> (1-1000000)$routes [instance (0-255)$instance]",
        "Sharp Routing Protocol\n"
        "Remove some routes\n"
        "Routes to remove\n"
@@ -603,14 +605,14 @@ DEFPY (remove_routes,
 
 	memset(&prefix, 0, sizeof(prefix));
 
-	if (start4.s_addr != INADDR_ANY) {
-		prefix.family = AF_INET;
-		prefix.prefixlen = IPV4_MAX_BITLEN;
-		prefix.u.prefix4 = start4;
+	if (start4_str != NULL) {
+		prefix.family = start4->family;
+		prefix.prefixlen = start4->prefixlen;
+		prefix.u.prefix4 = start4->prefix;
 	} else {
-		prefix.family = AF_INET6;
-		prefix.prefixlen = IPV6_MAX_BITLEN;
-		prefix.u.prefix6 = start6;
+		prefix.family = start6->family;
+		prefix.prefixlen = start6->prefixlen;
+		prefix.u.prefix6 = start6->prefix;
 	}
 
 	vrf = vrf_lookup_by_name(vrf_name ? vrf_name : VRF_DEFAULT_NAME);
@@ -1437,6 +1439,316 @@ DEFPY (tc_filter_rate,
 	return CMD_SUCCESS;
 }
 
+#define TVR_DB_STR "Time Variant Routing Database\n"
+
+#define TVR_INSTALL_ROUTE(prefix_ptr, next_hop) install_routes_magic( \
+		self, vty, argc, argv, \
+		NULL, NULL, NULL, \
+		prefix_ptr, \
+		NULL, (struct in_addr) { INADDR_ANY }, NULL, \
+		next_hop, \
+		NULL, NULL, NULL, (struct in_addr) { INADDR_ANY }, NULL, (struct in6_addr) {}, NULL, \
+		1, \
+		NULL, 0, NULL, 0, NULL, NULL, NULL \
+	)
+
+#define TVR_REMOVE_ROUTE(prefix_ptr) remove_routes_magic( \
+		self, vty, argc, argv, \
+		NULL, NULL, NULL, \
+		prefix_ptr, \
+		NULL, \
+		1, \
+		NULL, 0, NULL \
+	)
+
+DEFPY(sharp_tvrdb_create,
+	  sharp_tvrdb_create_cmd,
+	  "tvrdb create",
+	  TVR_DB_STR 
+	  "Creation\n")
+{
+	if(sg.db != NULL) {
+		vty_out(vty, "Database already exists!\n");
+		return CMD_WARNING;
+	}
+
+	sg.db = tvr_db_create();
+	if(sg.db == NULL) {
+		vty_out(vty, "Failed!\n");	
+		return CMD_WARNING;
+	}
+	vty_out(vty, "Succeeded!\n");
+
+	return CMD_SUCCESS;
+}
+
+DEFPY(sharp_tvrdb_destroy,
+	  sharp_tvrdb_destroy_cmd,
+	  "tvrdb destroy",
+	  TVR_DB_STR 
+	  "Destruction\n")
+{
+	if(sg.db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+	
+	tvr_db_destroy(&sg.db);
+	if(sg.db != NULL) {
+		vty_out(vty, "Failed!\n");	
+		return CMD_WARNING;
+	}
+	vty_out(vty, "Succeeded!\n");
+	return CMD_SUCCESS;
+}
+
+DEFPY(sharp_tvrdb_show,
+	  sharp_tvrdb_show_cmd,
+	  "tvrdb show",
+	  TVR_DB_STR 
+	  "Show\n")
+{
+	if(sg.db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+	tvr_db_show(sg.db, vty);
+	return CMD_SUCCESS;
+}
+
+
+DEFPY(sharp_tvrdb_aging,
+	  sharp_tvrdb_aging_cmd,
+	  "tvrdb aging (0-1000000000)$time_stamp",
+	  TVR_DB_STR
+	  "Aging\n")
+{
+	if(sg.db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+	size_t aged_nlri_cnt = tvr_db_aging(sg.db, time_stamp);
+	vty_out(vty, "%ld NLRI(s) aged!\n", aged_nlri_cnt);
+
+	return CMD_SUCCESS;
+}
+
+
+DEFPY(sharp_tvrdb_add_node_nlri,
+	  sharp_tvrdb_add_node_nlri_cmd,
+	  "tvrdb add node_nlri \
+	  (0-1000000000)$local_node \
+	  (0-1000000000)$time_stamp \
+	  (0-255)$spf_status \
+	  (0-1000000000)$seq_num",
+	  TVR_DB_STR
+	  "Add node NLRI\n")
+{
+	struct tvr_nlri nlri;
+	nlri.type = NODE;
+	nlri.u.node_nlri.local_node = local_node;
+	nlri.u.node_nlri.time_stamp = time_stamp;
+	nlri.u.node_nlri.attr.spf_status = spf_status;
+	nlri.u.node_nlri.attr.seq_num = seq_num;
+
+	if(sg.db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	bool success = tvr_db_process(sg.db, &nlri, false);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+	return CMD_SUCCESS;
+}
+
+
+DEFPY(sharp_tvrdb_del_node_nlri,
+	  sharp_tvrdb_del_node_nlri_cmd,
+	  "tvrdb del node_nlri \
+	  (0-1000000000)$local_node \
+	  (0-1000000000)$time_stamp",
+	  TVR_DB_STR
+	  "Delete node NLRI\n")
+{
+	struct tvr_nlri nlri;
+	nlri.type = NODE;
+	nlri.u.node_nlri.local_node = local_node;
+	nlri.u.node_nlri.time_stamp = time_stamp;
+
+	if(sg.db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	bool success = tvr_db_process(sg.db, &nlri, true);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+	return CMD_SUCCESS;
+}
+
+
+DEFPY(sharp_tvrdb_add_link_nlri,
+	  sharp_tvrdb_add_link_nlri_cmd,
+	  "tvrdb add link_nlri \
+	  (0-1000000000)$local_node \
+	  (0-1000000000)$remote_node \
+	  X:X::X:X$link_addr \
+	  (0-1000000000)$time_stamp \
+	  (0-1000000000)$igb_metric \
+	  (0-255)$spf_status \
+	  (0-1000000000)$seq_num",
+	  TVR_DB_STR
+	  "Add link NLRI\n")
+{
+	struct tvr_nlri nlri;
+	nlri.type = LINK;
+	nlri.u.link_nlri.local_node = local_node;
+	nlri.u.link_nlri.remote_node = remote_node;
+	nlri.u.link_nlri.link_addr = link_addr;
+	nlri.u.link_nlri.time_stamp = time_stamp;
+	nlri.u.link_nlri.attr.igp_metric = igb_metric;
+	nlri.u.link_nlri.attr.spf_status = spf_status;
+	nlri.u.link_nlri.attr.seq_num = seq_num;
+
+	if(sg.db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	bool success = tvr_db_process(sg.db, &nlri, false);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+	return CMD_SUCCESS;
+}
+
+
+DEFPY(sharp_tvrdb_del_link_nlri,
+	  sharp_tvrdb_del_link_nlri_cmd,
+	  "tvrdb del link_nlri \
+	  (0-1000000000)$local_node \
+	  (0-1000000000)$remote_node \
+	  X:X::X:X$link_addr \
+	  (0-1000000000)$time_stamp",
+	  TVR_DB_STR
+	  "Delete link NLRI\n")
+{
+	struct tvr_nlri nlri;
+	nlri.type = LINK;
+	nlri.u.link_nlri.local_node = local_node;
+	nlri.u.link_nlri.remote_node = remote_node;
+	nlri.u.link_nlri.link_addr = link_addr;
+	nlri.u.link_nlri.time_stamp = time_stamp;
+
+	if(sg.db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	bool success = tvr_db_process(sg.db, &nlri, true);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+	return CMD_SUCCESS;
+}
+
+
+DEFPY(sharp_tvrdb_add_prefix_nlri,
+	  sharp_tvrdb_add_prefix_nlri_cmd,
+	  "tvrdb add prefix_nlri \
+	  (0-1000000000)$local_node \
+	  X:X::X:X/M$prefix \
+	  (0-1000000000)$time_stamp \
+	  (0-255)$spf_status \
+	  (0-1000000000)$seq_num",
+	  TVR_DB_STR
+	  "Add prefix NLRI\n")
+{
+	struct tvr_nlri nlri;
+	nlri.type = PREFIX;
+	
+	nlri.u.prefix_nlri.local_node = local_node;
+	nlri.u.prefix_nlri.prefixlen = prefix->prefixlen;
+	nlri.u.prefix_nlri.prefix = prefix->prefix;
+	nlri.u.prefix_nlri.time_stamp = time_stamp;
+	nlri.u.prefix_nlri.attr.spf_status = spf_status;
+	nlri.u.prefix_nlri.attr.seq_num = seq_num;
+
+	if(sg.db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	bool success = tvr_db_process(sg.db, &nlri, false);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+	return CMD_SUCCESS;
+}
+
+
+DEFPY(sharp_tvrdb_del_prefix_nlri,
+	  sharp_tvrdb_del_prefix_nlri_cmd,
+	  "tvrdb del prefix_nlri \
+	  (0-1000000000)$local_node \
+	  X:X::X:X/M$prefix \
+	  (0-1000000000)$time_stamp",
+	  TVR_DB_STR
+	  "Add prefix NLRI\n")
+{
+	struct tvr_nlri nlri;
+	nlri.type = PREFIX;
+	
+	nlri.u.prefix_nlri.local_node = local_node;
+	nlri.u.prefix_nlri.prefixlen = prefix->prefixlen;
+	nlri.u.prefix_nlri.prefix = prefix->prefix;
+	nlri.u.prefix_nlri.time_stamp = time_stamp;
+
+	if(sg.db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	bool success = tvr_db_process(sg.db, &nlri, true);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+	return CMD_SUCCESS;
+}
+
+
+DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
+	  "tvr spf \
+	  (0-1000000000)$src_node \
+	  (0-1000000000)$time_stamp1 \
+	  (0-1000000000)$time_stamp2",
+	  "Time Variant Routing Shortest Path First (SPF)\n")
+{
+	if(sg.db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	struct tvr_spf *spf;
+	struct tvr_route *route;
+
+	spf = tvr_spf_create(sg.db, src_node, time_stamp1, time_stamp2);
+
+	frr_each_safe(route_rb, &spf->route_rb_root, route) {
+		struct prefix_ipv6 prefix;
+		prefix.family = AF_INET6;
+		prefix.prefixlen = route->prefixlen;
+		prefix.prefix = route->prefix;
+		if(route->dist < TVR_INF_DIST) {
+			TVR_INSTALL_ROUTE(&prefix, route->next_hop);
+		} else {
+			TVR_REMOVE_ROUTE(&prefix);
+		}
+	}
+
+	tvr_spf_destroy(&spf);
+
+	return CMD_SUCCESS;
+}
+
+
 void sharp_vty_init(void)
 {
 	install_element(ENABLE_NODE, &install_routes_data_dump_cmd);
@@ -1475,6 +1787,18 @@ void sharp_vty_init(void)
 	install_element(ENABLE_NODE, &no_sharp_interface_protodown_cmd);
 
 	install_element(ENABLE_NODE, &tc_filter_rate_cmd);
+
+	install_element(ENABLE_NODE, &sharp_tvrdb_create_cmd);
+	install_element(ENABLE_NODE, &sharp_tvrdb_destroy_cmd);
+	install_element(ENABLE_NODE, &sharp_tvrdb_show_cmd);
+	install_element(ENABLE_NODE, &sharp_tvrdb_aging_cmd);
+	install_element(ENABLE_NODE, &sharp_tvrdb_add_node_nlri_cmd);
+	install_element(ENABLE_NODE, &sharp_tvrdb_del_node_nlri_cmd);
+	install_element(ENABLE_NODE, &sharp_tvrdb_add_link_nlri_cmd);
+	install_element(ENABLE_NODE, &sharp_tvrdb_del_link_nlri_cmd);
+	install_element(ENABLE_NODE, &sharp_tvrdb_add_prefix_nlri_cmd);
+	install_element(ENABLE_NODE, &sharp_tvrdb_del_prefix_nlri_cmd);
+	install_element(ENABLE_NODE, &sharp_tvr_spf_cmd);
 
 	return;
 }
