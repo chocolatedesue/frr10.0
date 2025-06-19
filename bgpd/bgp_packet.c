@@ -50,6 +50,7 @@
 #include "bgpd/bgp_keepalives.h"
 #include "bgpd/bgp_flowspec.h"
 #include "bgpd/bgp_trace.h"
+#include <fcntl.h>
 
 DEFINE_HOOK(bgp_packet_dump,
 		(struct peer *peer, uint8_t type, bgp_size_t size,
@@ -456,6 +457,8 @@ void bgp_generate_updgrp_packets(struct event *thread)
 	uint32_t generated = 0;
 	afi_t afi;
 	safi_t safi;
+
+	
 
 	wpq = atomic_load_explicit(&peer->bgp->wpkt_quanta,
 				   memory_order_relaxed);
@@ -2520,6 +2523,28 @@ static int bgp_update_receive(struct peer_connection *connection,
 
 	/* Notify BGP Conditional advertisement scanner process */
 	peer->advmap_table_change = true;
+
+#ifdef BGP_ATTR_LINK_STATE_FLIP
+	if ((attr.flag & ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP))) {
+		char debug_buf[300];
+		// int source_route_id = -1, destination_route_id = -1, link_state_id = 1;
+		int source_route_id = attr.source_router_id, 
+			destination_route_id = attr.destination_router_id, 
+			link_state_id = attr.link_state_id;
+		char local_route_id_str[INET_ADDRSTRLEN], src_route_id_str[INET_ADDRSTRLEN],dst_route_id_str[INET_ADDRSTRLEN], remote_route_id_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &peer->local_id.s_addr, local_route_id_str, sizeof(local_route_id_str));
+		inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_route_id_str, sizeof(remote_route_id_str));
+		inet_ntop(AF_INET, &source_route_id, src_route_id_str, sizeof(src_route_id_str));
+		inet_ntop(AF_INET, &destination_route_id, dst_route_id_str, sizeof(dst_route_id_str));
+		// Log the detected link-state flip attribute
+		sprintf(debug_buf, "[%s] validly Received flip attribute from [%s]: source_route_id: %s, destination_route_id: %s, link_state_id: %d\n",
+				local_route_id_str, remote_route_id_str, src_route_id_str, dst_route_id_str, link_state_id);
+		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+		close(fp1);
+	}
+#endif /* BGP_ATTR_LINK_STATE_FLIP */
+
 
 	return Receive_UPDATE_message;
 }

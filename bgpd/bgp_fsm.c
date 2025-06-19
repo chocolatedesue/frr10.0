@@ -538,6 +538,12 @@ void bgp_routeadv_timer(struct event *thread)
 		zlog_debug("%s [FSM] Timer (routeadv timer expire)", peer->host);
 
 	peer->synctime = monotime(NULL);
+	// peer_lock(peer);
+	peer -> is_flip = true;
+	peer -> final_flip_state = 1 ;
+	peer -> final_remote_id = peer->remote_id.s_addr;
+
+	
 
 	event_add_timer_msec(bm->master, bgp_generate_updgrp_packets, connection,
 			     0, &connection->t_generate_updgrp_packets);

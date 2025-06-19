@@ -321,6 +321,11 @@ struct attr {
 
 	/* AIGP Metric */
 	uint64_t aigp_metric;
+
+	/* BGP link state flipping */
+	uint32_t source_router_id;
+	uint32_t destination_router_id;
+	uint8_t link_state_id;
 };
 
 /* rmap_change_flags definition */

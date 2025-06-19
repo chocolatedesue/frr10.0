@@ -57,6 +57,7 @@ DEFINE_HOOK(bgp_hook_config_write_vrf, (struct vty *vty, struct vrf *vrf),
 #ifdef ENABLE_BGP_VNC
 #include "bgpd/rfapi/rfapi_backend.h"
 #endif
+#include <asm-generic/fcntl.h>
 
 DEFINE_HOOK(bgp_hook_vrf_update, (struct vrf *vrf, bool enabled),
 	    (vrf, enabled));
@@ -502,6 +503,17 @@ int main(int argc, char **argv)
 	}
 	if (skip_runas)
 		memset(&bgpd_privs, 0, sizeof(bgpd_privs));
+
+
+	// char debug_buf[300];
+    // // sprintf(debug_buf, "local_route_id %u detected: source_route_id: %d, destination_route_id: %d, link_state_id: %d\n",
+	// // 		peer->local_id.s_addr, source_route_id, destination_route_id, link_state_id);
+	// sprintf(debug_buf, 
+	// 	 "bgpd started with instance ");
+    // int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+    // int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+    // close(fp1);
+	
 
 	/* BGP master init. */
 	bgp_master_init(frr_init(), buffer_size, addresses);

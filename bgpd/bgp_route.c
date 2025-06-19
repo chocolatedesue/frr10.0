@@ -77,6 +77,7 @@
 #include "bgpd/bgp_pbr.h"
 
 #include "bgpd/bgp_route_clippy.c"
+#include <asm-generic/fcntl.h>
 
 DEFINE_HOOK(bgp_snmp_update_stats,
 	    (struct bgp_dest *rn, struct bgp_path_info *pi, bool added),
