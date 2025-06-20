@@ -4982,21 +4982,20 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 				source_route_id = attr->source_router_id;
 				destination_route_id = attr->destination_router_id;
 				link_state_id = attr->link_state_id;
+				attr->flag &= ~ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP);
 		} else {
-			source_route_id = bgp->router_id.s_addr;
-			// destination_route_id = peer->remote_id.s_addr;
-			// link_state_id = peer->final_flip_state;
+			source_route_id = source_peer->local_id.s_addr;
 			destination_route_id = source_peer->remote_id.s_addr;
-			link_state_id = source_peer->final_flip_state;
-			peer->is_flip = 0;
-			peer->final_flip_state = 0;
-			peer->final_remote_id = 0;
+			link_state_id = source_peer->final_flip_state;	
 
-			// peer -> is_flip = 0;
-			// peer -> final_flip_state = -1;
 		}
 		
-		stream_putc(s, BGP_ATTR_FLAG_OPTIONAL | BGP_ATTR_FLAG_TRANS);
+			source_peer -> is_flip = 0;
+			source_peer -> final_flip_state = 0;
+			source_peer -> final_remote_id = 0;
+
+		
+		stream_putc(s, BGP_ATTR_FLAG_TRANS);
 		stream_putc(s, BGP_ATTR_LINK_STATE_FLIP);
 		stream_putc(s, 9); // Length
 		// 9 = 4 (source_route_id) + 4 (dest_route_id) + 1 
@@ -5011,17 +5010,17 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 		inet_ntop(AF_INET, &source_route_id, src_route_id_str, sizeof(src_route_id_str));
 		inet_ntop(AF_INET, &destination_route_id, dst_route_id_str, sizeof(dst_route_id_str));
 		// Log the detected link-state flip attribute
-		sprintf(debug_buf, "[%s] SEND flip attribute to [%s]: source_route_id=%s, destination_route_id=%s, link_state_id=%d\n",
+		sprintf(debug_buf, "[%s] SEND flip attribute to [%s]: source_route_id=%s, destination_route_id=%s, link_state_id=%d, peer physical address:%p\n",
 					local_route_id_str, remote_route_id_str, 
-					src_route_id_str, dst_route_id_str, link_state_id);
+					src_route_id_str, dst_route_id_str, link_state_id, (void*)&peer);
 		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 		int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
-		sprintf(debug_buf, "local_route_id_raw=%u, source_route_id_raw=%u\n",
-					bgp->router_id, peer->remote_id.s_addr);
-		int write_n2 = write(fp1, debug_buf, strlen(debug_buf));
-		sprintf(debug_buf,"Local_as=%u, Remote_as=%u\n",
-					peer->local_as, peer->as);
-		int write_n3 = write(fp1, debug_buf, strlen(debug_buf));
+		// sprintf(debug_buf, "local_route_id_raw=%u, source_route_id_raw=%u\n",
+		// 			bgp->router_id, peer->remote_id.s_addr);
+		// int write_n2 = write(fp1, debug_buf, strlen(debug_buf));
+		// sprintf(debug_buf,"Local_as=%u, Remote_as=%u\n",
+		// 			peer->local_as, peer->as);
+		// int write_n3 = write(fp1, debug_buf, strlen(debug_buf));
 		close(fp1);
 	}
 

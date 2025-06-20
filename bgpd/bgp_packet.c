@@ -2553,8 +2553,8 @@ static int bgp_update_receive(struct peer_connection *connection,
 		inet_ntop(AF_INET, &source_route_id, src_route_id_str, sizeof(src_route_id_str));
 		inet_ntop(AF_INET, &destination_route_id, dst_route_id_str, sizeof(dst_route_id_str));
 		// Log the detected link-state flip attribute
-		sprintf(debug_buf, "[%s] validly Received flip attribute from [%s]: source_route_id: %s, destination_route_id: %s, link_state_id: %d\n",
-				local_route_id_str, remote_route_id_str, src_route_id_str, dst_route_id_str, link_state_id);
+		sprintf(debug_buf, "[%s] validly Received flip attribute from [%s]: source_route_id: %s, destination_route_id: %s, link_state_id: %d, peer -> address: %p\n",
+				local_route_id_str, remote_route_id_str, src_route_id_str, dst_route_id_str, link_state_id, (void*)peer);
 		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 		int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
 		close(fp1);

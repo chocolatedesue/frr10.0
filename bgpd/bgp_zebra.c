@@ -226,6 +226,23 @@ static int bgp_ifp_up(struct interface *ifp)
 	if (!bgp)
 		return 0;
 
+	// struct peer *peer;
+    // for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, peer)) {
+    //     if ((peer->ttl != BGP_DEFAULT_TTL)
+    //         && (peer->gtsm_hops != BGP_GTSM_HOPS_CONNECTED))
+    //         continue;
+
+    //     if (ifp == peer->nexthop.ifp) {
+    //         // zlog_notice(
+    //         //     "Link for peer %s (%s) came up, BGP session can now establish.",
+    //         //     peer->host, ifp->name);
+	// 			// 			peer -> is_flip = 1;
+	// 			// peer -> final_flip_state = 1 ;
+	// 			// peer -> final_remote_id = peer->remote_id.s_addr;
+    //     }
+    // }
+
+
 	frr_each (if_connected, ifp->connected, c)
 		bgp_connected_add(bgp, c);
 
@@ -275,6 +292,10 @@ static int bgp_ifp_down(struct interface *ifp)
 			if (ifp == peer->nexthop.ifp) {
 				BGP_EVENT_ADD(peer->connection, BGP_Stop);
 				peer->last_reset = PEER_DOWN_IF_DOWN;
+
+				// peer -> is_flip = 1;
+				// peer -> final_flip_state = 0 ;
+				// peer -> final_remote_id = peer->remote_id.s_addr;
 			}
 		}
 	}

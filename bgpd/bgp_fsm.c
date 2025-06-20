@@ -541,9 +541,9 @@ void bgp_routeadv_timer(struct event *thread)
 	peer->synctime = monotime(NULL);
 	// peer_lock(peer);	
 
-	peer -> is_flip = 1;
-	peer -> final_flip_state = 1 ;
-	peer -> final_remote_id = peer->remote_id.s_addr;
+	// peer -> is_flip = 1;
+	// peer -> final_flip_state = 1 ;
+	// peer -> final_remote_id = peer->remote_id.s_addr;
 	// connection -> is_flip = 1;
 	// connection -> final_flip_state = 1 ;
 	// connection -> final_remote_id = peer->remote_id.s_addr;
@@ -1285,9 +1285,37 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 
 	/* Fire backward transition hook if that's the case */
 	if (connection->ostatus == Established &&
-	    connection->status != Established)
+	    connection->status != Established) {
+
+			char local_id_ip_str[INET_ADDRSTRLEN], remote_id_ip_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &peer->local_id.s_addr,
+			  local_id_ip_str, sizeof(local_id_ip_str));
+		inet_ntop(AF_INET, &peer->remote_id.s_addr,
+			  remote_id_ip_str, sizeof(remote_id_ip_str));
+
+
+			char debug_buf[300];
+sprintf(debug_buf, "BGP IDEL from established: %s, local_id: %s, remote_id: %s, peer->remote_id.s_addr: %u, peer->is_flip: %d, peer->final_flip_state: %d, peer->final_remote_id: %u, peer physical address:%p\n",
+			   peer->host, local_id_ip_str, remote_id_ip_str,
+			   peer->remote_id.s_addr, peer->is_flip,
+			   peer->final_flip_state, peer->final_remote_id,
+			(void *)peer
+			);
+
+		// zlog_debug("%s", debug_buf);
+		// Write to file
+		int fp = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		int write_n = write(fp, debug_buf, strlen(debug_buf));
+		close(fp);
+
+
+
+		peer -> is_flip = 1;
+		peer -> final_flip_state = 0;
+		peer -> final_remote_id = peer->remote_id.s_addr;
 		hook_call(peer_backward_transition, peer);
 
+	}
 	/* Save event that caused status change. */
 	peer->last_major_event = peer->cur_event;
 
@@ -2099,6 +2127,11 @@ bgp_establish(struct peer_connection *connection)
 		hash_release(peer->bgp->peerhash, other);
 
 	peer = peer_xfer_conn(peer);
+
+	// peer -> is_flip = 1;
+	// peer -> final_flip_state = 1;
+	// peer -> final_remote_id = peer->remote_id.s_addr;
+
 	if (!peer) {
 		flog_err(EC_BGP_CONNECT, "%%Neighbor failed in xfer_conn");
 
@@ -2151,9 +2184,6 @@ bgp_establish(struct peer_connection *connection)
 	// int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
 	// close(fp1);
 
-	// peer -> is_flip = 1;
-	// peer -> final_flip_state = 1 ;
-	// peer -> final_remote_id = peer->remote_id.s_addr;
 
 	/* bgp log-neighbor-changes of neighbor Up */
 	if (CHECK_FLAG(peer->bgp->flags, BGP_FLAG_LOG_NEIGHBOR_CHANGES)) {
@@ -2300,6 +2330,15 @@ bgp_establish(struct peer_connection *connection)
 
 	bgp_announce_peer(peer);
 
+	
+// char debug_f[300];
+// sprintf(debug_buf, "BGP established: %s, fd: %d, remote_id: %pI4, local_id: %pI4\n",
+// 	 peer->host, connection->fd, &peer->remote_id.s_addr,
+// 	 &peer->local_id.s_addr);
+// int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+// int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+// close(fp1);
+
 	/* Start the route advertisement timer to send updates to the peer - if
 	 * BGP
 	 * is not in read-only mode. If it is, the timer will be started at the
@@ -2308,9 +2347,25 @@ bgp_establish(struct peer_connection *connection)
 	 */
 	if (!bgp_update_delay_active(peer->bgp)) {
 		EVENT_OFF(peer->connection->t_routeadv);
-		// peer -> is_flip = 1;
-		// peer -> final_flip_state = 1 ;
-		// peer -> final_remote_id = peer->remote_id.s_addr;
+		peer -> is_flip = 1;
+		peer -> final_flip_state = 1 ;
+		peer -> final_remote_id = peer->remote_id.s_addr;
+		char debug_buf[300];
+
+		char local_id_ip_str[INET_ADDRSTRLEN], remote_id_ip_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &peer->local_id.s_addr, local_id_ip_str
+			, sizeof(local_id_ip_str));
+		inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_id_ip_str
+			, sizeof(remote_id_ip_str));
+
+		sprintf(debug_buf, "BGP established: local_id: %s, remote_id: %s, "
+				"peer: %s, peer_address: %p\n", 
+				local_id_ip_str, remote_id_ip_str,
+				peer->host, (void *)peer);
+		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+		close(fp1);
+
 		BGP_TIMER_ON(peer->connection->t_routeadv, bgp_routeadv_timer,
 			     0);
 	}

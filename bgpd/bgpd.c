@@ -1519,8 +1519,8 @@ struct peer *peer_new(struct bgp *bgp)
 	/* Create buffers. */
 	peer->connection = bgp_peer_connection_new(peer);
 	peer->is_flip = 0;
-	peer->final_flip_state = -1;
-	peer->final_remote_id = -1;
+	peer->final_flip_state = 0;
+	peer->final_remote_id = 0;
 
 	/* Set default value. */
 	peer->v_start = BGP_INIT_START_TIMER;
