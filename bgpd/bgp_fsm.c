@@ -42,6 +42,7 @@
 #include "bgpd/bgp_io.h"
 #include "bgpd/bgp_zebra.h"
 #include "bgpd/bgp_vty.h"
+#include <asm-generic/fcntl.h>
 
 DEFINE_HOOK(peer_backward_transition, (struct peer * peer), (peer));
 DEFINE_HOOK(peer_status_changed, (struct peer * peer), (peer));
@@ -538,12 +539,14 @@ void bgp_routeadv_timer(struct event *thread)
 		zlog_debug("%s [FSM] Timer (routeadv timer expire)", peer->host);
 
 	peer->synctime = monotime(NULL);
-	// peer_lock(peer);
-	peer -> is_flip = true;
+	// peer_lock(peer);	
+
+	peer -> is_flip = 1;
 	peer -> final_flip_state = 1 ;
 	peer -> final_remote_id = peer->remote_id.s_addr;
-
-	
+	// connection -> is_flip = 1;
+	// connection -> final_flip_state = 1 ;
+	// connection -> final_remote_id = peer->remote_id.s_addr;
 
 	event_add_timer_msec(bm->master, bgp_generate_updgrp_packets, connection,
 			     0, &connection->t_generate_updgrp_packets);
@@ -2131,6 +2134,27 @@ bgp_establish(struct peer_connection *connection)
 	peer->established++;
 	bgp_fsm_change_status(connection, Established);
 
+	// char debug_buf[300];
+	// char local_id_ip_str[INET_ADDRSTRLEN], remote_id_ip_str[INET_ADDRSTRLEN];
+	// inet_ntop(AF_INET, &peer->local_id.s_addr, local_id_ip_str
+	// 		, sizeof(local_id_ip_str));
+	// inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_id_ip_str
+	// 		, sizeof(remote_id_ip_str));
+	// // Debugging information to a file
+
+	// sprintf(debug_buf, "BGP established: %s, fd: %d, remote_id: %s, "
+	// 		"local_id: %s\n",
+	// 	 peer->host, connection->fd, remote_id_ip_str,
+	// 	 local_id_ip_str);
+
+	// int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	// int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+	// close(fp1);
+
+	// peer -> is_flip = 1;
+	// peer -> final_flip_state = 1 ;
+	// peer -> final_remote_id = peer->remote_id.s_addr;
+
 	/* bgp log-neighbor-changes of neighbor Up */
 	if (CHECK_FLAG(peer->bgp->flags, BGP_FLAG_LOG_NEIGHBOR_CHANGES)) {
 		struct vrf *vrf = vrf_lookup_by_id(peer->bgp->vrf_id);
@@ -2284,6 +2308,9 @@ bgp_establish(struct peer_connection *connection)
 	 */
 	if (!bgp_update_delay_active(peer->bgp)) {
 		EVENT_OFF(peer->connection->t_routeadv);
+		// peer -> is_flip = 1;
+		// peer -> final_flip_state = 1 ;
+		// peer -> final_remote_id = peer->remote_id.s_addr;
 		BGP_TIMER_ON(peer->connection->t_routeadv, bgp_routeadv_timer,
 			     0);
 	}

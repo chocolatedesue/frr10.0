@@ -42,6 +42,7 @@
 #include "bgpd/bgp_mplsvpn.h"
 #include "bgpd/bgp_label.h"
 #include "bgpd/bgp_addpath.h"
+#include <asm-generic/fcntl.h>
 
 /********************
  * PRIVATE FUNCTIONS
@@ -636,9 +637,35 @@ bool subgroup_packets_to_build(struct update_subgroup *subgrp)
 	return false;
 }
 
+// struct bpacket *subgroup_update_packet_with_flip_state(struct update_subgroup *subgrp,
+// 							      uint8_t is_flip, uint8_t final_flip_state, uint32_t final_remote_id) 
+// 	{
+// 	struct peer *peer;
+// 	// if (is_flip) {
+// 	// 	peer = SUBGRP_PEER(subgrp);
+// 	// 	peer -> is_flip = is_flip;
+// 	// 	peer -> final_flip_state = final_flip_state;
+// 	// 	peer -> final_remote_id = final_remote_id;
+
+// 	// }
+	
+// 	return subgroup_update_packet(subgrp, is_flip, final_flip_state, final_remote_id);
+// }
+
+
 /* Make BGP update packet.  */
-struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp)
+struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp, uint8_t is_flip, uint8_t final_flip_state, uint32_t final_remote_id, struct peer* source_peer)
+
 {
+
+	// 函数入口立即添加调试信息
+	char debug_buf[500];
+	sprintf(debug_buf, "DEBUG: subgroup_update_packet ENTRY: is_flip = %u, final_flip_state = %u, final_remote_id = %u\n",
+		is_flip, final_flip_state, final_remote_id);
+	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	write(fp1, debug_buf, strlen(debug_buf));
+	close(fp1);
+
 	struct bpacket_attr_vec_arr vecarr;
 	struct bpacket *pkt;
 	struct peer *peer;
@@ -676,6 +703,8 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp)
 	peer = SUBGRP_PEER(subgrp);
 	afi = SUBGRP_AFI(subgrp);
 	safi = SUBGRP_SAFI(subgrp);
+
+
 	s = subgrp->work;
 	stream_reset(s);
 	snlri = subgrp->scratch;
@@ -687,6 +716,7 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp)
 	addpath_overhead = addpath_capable ? BGP_ADDPATH_ID_LEN : 0;
 
 	adv = bgp_adv_fifo_first(&subgrp->sync->update);
+
 	while (adv) {
 		const struct prefix *dest_p;
 
@@ -738,9 +768,16 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp)
 
 			/* 5: Encode all the attributes, except MP_REACH_NLRI
 			 * attr. */
+
+			// char debug_buf[300];
+			// sprintf(debug_buf, "Before bgp_packet_attribute call, is_flip: %u, final_flip_state: %u, final_remote_id: %u\n", is_flip, final_flip_state, final_remote_id);
+			// int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+			// int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+			// close(fp1);
+
 			total_attr_len = bgp_packet_attribute(
 				NULL, peer, s, adv->baa->attr, &vecarr, NULL,
-				afi, safi, from, NULL, NULL, 0, 0, 0, path);
+				afi, safi, from, NULL, NULL, 0, 0, 0, path, is_flip, final_flip_state, final_remote_id, source_peer);
 
 			space_remaining =
 				STREAM_CONCAT_REMAIN(s, snlri, STREAM_SIZE(s))
@@ -1150,7 +1187,7 @@ void subgroup_default_update_packet(struct update_subgroup *subgrp,
 				     safi, from, NULL, &label, num_labels,
 				     addpath_capable,
 				     BGP_ADDPATH_TX_ID_FOR_DEFAULT_ORIGINATE,
-				     NULL);
+				     NULL, 0, 0, 0, NULL);
 
 	/* Set Total Path Attribute Length. */
 	stream_putw_at(s, pos, total_attr_len);

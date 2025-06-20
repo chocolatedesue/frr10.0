@@ -458,6 +458,14 @@ void bgp_generate_updgrp_packets(struct event *thread)
 	afi_t afi;
 	safi_t safi;
 
+	// char debug_buf[300];
+	// sprintf(debug_buf, "start to pack: peer->is_flip = %d, peer->final_flip_state = %d, peer->final_remote_id = %d\n",
+	// 	peer->is_flip, peer->final_flip_state, peer->final_remote_id);
+		
+	// int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	// int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+	// close(fp1);
+
 	
 
 	wpq = atomic_load_explicit(&peer->bgp->wpkt_quanta,
@@ -487,7 +495,7 @@ void bgp_generate_updgrp_packets(struct event *thread)
 		bgp_write_proceed_actions(peer);
 		return;
 	}
-
+		// int flag = -1;
 	do {
 		enum bgp_af_index index;
 
@@ -510,9 +518,9 @@ void bgp_generate_updgrp_packets(struct event *thread)
 				next_pkt = subgroup_withdraw_packet(
 					PAF_SUBGRP(paf));
 				if (!next_pkt || !next_pkt->buffer)
-					subgroup_update_packet(PAF_SUBGRP(paf));
+					subgroup_update_packet(PAF_SUBGRP(paf),0,0,0,peer);
 				next_pkt = paf->next_pkt_to_send;
-			}
+			} 
 
 			/*
 			 * If we still don't have a packet to send to the peer,
@@ -617,6 +625,12 @@ void bgp_generate_updgrp_packets(struct event *thread)
 		bgp_writes_on(connection);
 
 	bgp_write_proceed_actions(peer);
+	// if (flag == 1) {
+	// 	peer -> is_flip = 0;
+	// 	peer -> final_flip_state = 0;
+	// 	peer -> final_remote_id = 0;
+	// }
+	
 }
 
 /*
@@ -714,6 +728,8 @@ void bgp_open_send(struct peer_connection *connection)
 	bgp_packet_add(connection, peer, s);
 
 	bgp_writes_on(connection);
+
+
 }
 
 /*

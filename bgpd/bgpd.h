@@ -1143,6 +1143,10 @@ struct llgr_info {
 struct peer_connection {
 	struct peer *peer;
 
+	uint8_t is_flip;
+	uint8_t final_flip_state;
+	uint32_t final_remote_id;
+
 	/* Status of the peer connection. */
 	enum bgp_fsm_status status;
 	enum bgp_fsm_status ostatus;

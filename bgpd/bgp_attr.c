@@ -4408,6 +4408,7 @@ static bool bgp_append_local_as(struct peer *peer, afi_t afi, safi_t safi)
 	return false;
 }
 
+
 /* Make attribute packet. */
 bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 				struct stream *s, struct attr *attr,
@@ -4416,7 +4417,7 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 				struct peer *from, struct prefix_rd *prd,
 				mpls_label_t *label, uint32_t num_labels,
 				bool addpath_capable, uint32_t addpath_tx_id,
-				struct bgp_path_info *bpi)
+				struct bgp_path_info *bpi, uint8_t is_flip, uint8_t final_flip_state, uint32_t final_remote_id, struct peer* source_peer)
 {
 	size_t cp;
 	size_t aspath_sizep;
@@ -4961,7 +4962,17 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 
 	/* link state flip*/
 	// peer -> is_flip = 1;
-	if ( peer -> is_flip || (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP))) {
+{	
+	char debug_buf[300];
+	sprintf(debug_buf, "check before final pack: peer->is_flip = %d, peer->final_flip_state = %d, peer->final_remote_id = %d\n",
+		peer->is_flip, peer->final_flip_state, peer->final_remote_id);
+		
+	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+	close(fp1);
+
+}
+	if ( (source_peer && source_peer -> is_flip) || (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP))) {
 
 		int source_route_id = -1;
 		int destination_route_id = -1;
@@ -4973,11 +4984,16 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 				link_state_id = attr->link_state_id;
 		} else {
 			source_route_id = bgp->router_id.s_addr;
-			destination_route_id = peer->remote_id.s_addr;
-			link_state_id = peer->final_flip_state;
+			// destination_route_id = peer->remote_id.s_addr;
+			// link_state_id = peer->final_flip_state;
+			destination_route_id = source_peer->remote_id.s_addr;
+			link_state_id = source_peer->final_flip_state;
+			peer->is_flip = 0;
+			peer->final_flip_state = 0;
+			peer->final_remote_id = 0;
 
-			peer -> is_flip = false;
-			peer -> final_flip_state = -1;
+			// peer -> is_flip = 0;
+			// peer -> final_flip_state = -1;
 		}
 		
 		stream_putc(s, BGP_ATTR_FLAG_OPTIONAL | BGP_ATTR_FLAG_TRANS);
