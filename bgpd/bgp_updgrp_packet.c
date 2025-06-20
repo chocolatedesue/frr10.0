@@ -659,12 +659,12 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp, uint8_t i
 {
 
 	// 函数入口立即添加调试信息
-	char debug_buf[500];
-	sprintf(debug_buf, "DEBUG: subgroup_update_packet ENTRY: is_flip = %u, final_flip_state = %u, final_remote_id = %u\n",
-		is_flip, final_flip_state, final_remote_id);
-	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
-	write(fp1, debug_buf, strlen(debug_buf));
-	close(fp1);
+	// char debug_buf[500];
+	// sprintf(debug_buf, "DEBUG: subgroup_update_packet ENTRY: is_flip = %u, final_flip_state = %u, final_remote_id = %u\n",
+	// 	is_flip, final_flip_state, final_remote_id);
+	// int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	// write(fp1, debug_buf, strlen(debug_buf));
+	// close(fp1);
 
 	struct bpacket_attr_vec_arr vecarr;
 	struct bpacket *pkt;

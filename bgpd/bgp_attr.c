@@ -4963,13 +4963,13 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 	/* link state flip*/
 	// peer -> is_flip = 1;
 {	
-	char debug_buf[300];
-	sprintf(debug_buf, "check before final pack: peer->is_flip = %d, peer->final_flip_state = %d, peer->final_remote_id = %d\n",
-		peer->is_flip, peer->final_flip_state, peer->final_remote_id);
+	// char debug_buf[300];
+	// sprintf(debug_buf, "check before final pack: peer->is_flip = %d, peer->final_flip_state = %d, peer->final_remote_id = %d\n",
+	// 	peer->is_flip, peer->final_flip_state, peer->final_remote_id);
 		
-	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
-	int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
-	close(fp1);
+	// int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	// int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+	// close(fp1);
 
 }
 	if ( (source_peer && source_peer -> is_flip) || (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP))) {
