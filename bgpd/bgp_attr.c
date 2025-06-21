@@ -4990,6 +4990,7 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 
 		char local_route_id_str[INET_ADDRSTRLEN], src_route_id_str[INET_ADDRSTRLEN],dst_route_id_str[INET_ADDRSTRLEN],remote_route_id_str[INET_ADDRSTRLEN];
 		inet_ntop(AF_INET, &(bgp->router_id), local_route_id_str, sizeof(local_route_id_str));
+		inet_ntop(AF_INET, &(source_peer->remote_id), remote_route_id_str, sizeof(remote_route_id_str));
 		
 		
 		uint32_t source_route_id = 0;
@@ -5020,9 +5021,9 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 			link_final_state = attr->link_final_state;
 			// attr->flag &= ~ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP);
 
-				char debug_buf1[300];
-			sprintf(debug_buf1, "[%s] Trigger by received attr: \n",
-				local_route_id_str);
+			char debug_buf1[300];
+			sprintf(debug_buf1, "[%s] Trigger by received attr from [%s]\n",
+				local_route_id_str, remote_route_id_str);
 			int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 			int write_n1 = write(fp1, debug_buf1, strlen(debug_buf1));
 			close(fp1);
@@ -5043,7 +5044,7 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 		stream_putc(s, link_final_state);
 
 		char debug_buf[300];
-		inet_ntop(AF_INET, &(source_peer->remote_id), remote_route_id_str, sizeof(remote_route_id_str));
+		
 		inet_ntop(AF_INET, &source_route_id, src_route_id_str, sizeof(src_route_id_str));
 		inet_ntop(AF_INET, &destination_route_id, dst_route_id_str, sizeof(dst_route_id_str));
 		// Log the detected link-state flip attribute
