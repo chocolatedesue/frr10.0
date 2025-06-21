@@ -348,6 +348,11 @@ PREDECL_RBTREE_UNIQ(bgp_mplsvpn_nh_label_bind_cache);
 
 /* BGP instance structure.  */
 struct bgp {
+
+	uint8_t is_flip;
+	uint8_t final_flip_state;
+	uint32_t final_remote_id;
+
 	/* AS number of this BGP instance.  */
 	as_t as;
 	char *as_pretty;

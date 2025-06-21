@@ -43,6 +43,8 @@
 #include "bgpd/bgp_zebra.h"
 #include "bgpd/bgp_vty.h"
 #include <asm-generic/fcntl.h>
+#include <frr/linklist.h>
+// #include <coc、ci.h>
 
 DEFINE_HOOK(peer_backward_transition, (struct peer * peer), (peer));
 DEFINE_HOOK(peer_status_changed, (struct peer * peer), (peer));
@@ -1287,32 +1289,80 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 	if (connection->ostatus == Established &&
 	    connection->status != Established) {
 
-			char local_id_ip_str[INET_ADDRSTRLEN], remote_id_ip_str[INET_ADDRSTRLEN];
-		inet_ntop(AF_INET, &peer->local_id.s_addr,
-			  local_id_ip_str, sizeof(local_id_ip_str));
-		inet_ntop(AF_INET, &peer->remote_id.s_addr,
-			  remote_id_ip_str, sizeof(remote_id_ip_str));
+		// 	char bgp_router_id_str[INET_ADDRSTRLEN], bgp_final_remote_id_str[INET_ADDRSTRLEN];
+		// inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, bgp_router_id_str
+		// 	, sizeof(bgp_router_id_str));
+		// inet_ntop(AF_INET, &peer->bgp->final_remote_id, bgp_final_remote_id_str
+		// 	, sizeof(bgp_final_remote_id_str));
+		// peer -> bgp -> is_flip = 1;
+		// peer -> bgp -> final_flip_state = 0;
+		// peer -> bgp -> final_remote_id = peer->remote_id.s_addr;
+
+		// char debug_buf[400];
+		// sprintf(debug_buf, "BGP IDLE from established: bgp->router_id: %s, bgp->is_flip: %u, "
+		// 		"bgp->final_flip_state: %u, bgp->final_remote_id: %s, bgp_as: %u, "
+		// 		"bgp_address: %p\n", 
+		// 		bgp_router_id_str, peer->bgp->is_flip,
+		// 		peer->bgp->final_flip_state, bgp_final_remote_id_str, peer->bgp->as,
+		// 		(void *)peer->bgp);
+
+		// // zlog_debug("%s", debug_buf);
+		// // Write to file
+		// int fp = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		// int write_n = write(fp, debug_buf, strlen(debug_buf));
+		// close(fp);
 
 
-			char debug_buf[300];
-sprintf(debug_buf, "BGP IDEL from established: %s, local_id: %s, remote_id: %s, peer->remote_id.s_addr: %u, peer->is_flip: %d, peer->final_flip_state: %d, peer->final_remote_id: %u, peer physical address:%p\n",
-			   peer->host, local_id_ip_str, remote_id_ip_str,
-			   peer->remote_id.s_addr, peer->is_flip,
-			   peer->final_flip_state, peer->final_remote_id,
-			(void *)peer
-			);
 
-		// zlog_debug("%s", debug_buf);
-		// Write to file
-		int fp = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
-		int write_n = write(fp, debug_buf, strlen(debug_buf));
-		close(fp);
+		// peer -> is_flip = 1;
+		// peer -> final_flip_state = 0;
+		// peer -> final_remote_id = peer->remote_id.s_addr;
+
+		
+        struct listnode *node, *nnode;
+		struct peer *tmp_peer;
 
 
+		/* Iterate through all peers in the BGP instance */
+		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
+			/* Check peer connection status */
+			if (tmp_peer->connection->status == Established) {
+				tmp_peer->is_flip = 1;
+				tmp_peer->final_flip_state = 0;
+				tmp_peer->final_remote_id = tmp_peer ->remote_id.s_addr;
+				/* Use debug_buf to write to file */
+				char debug_buf[400];
+				char bgp_router_id_str[INET_ADDRSTRLEN], bgp_final_remote_id_str[INET_ADDRSTRLEN];
 
-		peer -> is_flip = 1;
-		peer -> final_flip_state = 0;
-		peer -> final_remote_id = peer->remote_id.s_addr;
+				inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, bgp_router_id_str,
+						sizeof(bgp_router_id_str));
+				inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr, bgp_final_remote_id_str,
+						sizeof(bgp_final_remote_id_str));
+
+				sprintf(debug_buf, "BGP IDEL peer traversal found connected peer: "
+        "bgp->router_id: %s, bgp->is_flip: %u, "
+        "bgp->final_flip_state: %u, bgp->final_remote_id: %s, "
+        "bgp_as: %u, bgp_address: %p, tmp_peer_address: %p, peer_address: %p\n",
+        bgp_router_id_str, (unsigned int)peer->bgp->is_flip,
+        (unsigned int)peer->bgp->final_flip_state, bgp_final_remote_id_str,
+        (unsigned int)peer->bgp->as, (void *)peer->bgp, (void *)tmp_peer, (void *)peer);
+
+				int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+				if (fp1 != -1) {
+					ssize_t bytes_written = write(fp1, debug_buf, strlen(debug_buf));
+					(void)bytes_written;
+					close(fp1);
+				}
+
+			}
+		}
+
+
+
+		
+
+		
+
 		hook_call(peer_backward_transition, peer);
 
 	}
@@ -2347,25 +2397,55 @@ bgp_establish(struct peer_connection *connection)
 	 */
 	if (!bgp_update_delay_active(peer->bgp)) {
 		EVENT_OFF(peer->connection->t_routeadv);
-		peer -> is_flip = 1;
-		peer -> final_flip_state = 1 ;
-		peer -> final_remote_id = peer->remote_id.s_addr;
-		char debug_buf[300];
+		// peer -> is_flip = 1;
+		// peer -> final_flip_state = 1 ;
+		// peer -> final_remote_id = peer->remote_id.s_addr;
 
-		char local_id_ip_str[INET_ADDRSTRLEN], remote_id_ip_str[INET_ADDRSTRLEN];
-		inet_ntop(AF_INET, &peer->local_id.s_addr, local_id_ip_str
-			, sizeof(local_id_ip_str));
-		inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_id_ip_str
-			, sizeof(remote_id_ip_str));
+        struct listnode *node, *nnode;
+		struct peer *tmp_peer;
 
-		sprintf(debug_buf, "BGP established: local_id: %s, remote_id: %s, "
-				"peer: %s, peer_address: %p\n", 
-				local_id_ip_str, remote_id_ip_str,
-				peer->host, (void *)peer);
-		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
-		int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
-		close(fp1);
 
+		/* Iterate through all peers in the BGP instance */
+		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
+			/* Check peer connection status */
+			if (tmp_peer->connection->status == Established) {
+				/* Use debug_buf to write to file */
+				char debug_buf[512];  /* Increased buffer size */
+				char bgp_router_id_str[INET_ADDRSTRLEN], tmp_peer_remote_id_str[INET_ADDRSTRLEN];
+
+				inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, bgp_router_id_str,
+						sizeof(bgp_router_id_str));
+				inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr, tmp_peer_remote_id_str,
+						sizeof(tmp_peer_remote_id_str));
+
+				/* Fixed format specifiers and variable names */
+				snprintf(debug_buf, sizeof(debug_buf), 
+						"BGP established peer traversal: "
+						"bgp->router_id: %s, tmp_peer_remote_id: %s, "
+						"bgp_as: %u, bgp_address: %p, tmp_peer_address: %p\n",
+						bgp_router_id_str, tmp_peer_remote_id_str,
+						(unsigned int)peer->bgp->as, (void *)peer->bgp, (void *)tmp_peer);
+
+				int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+				if (fp1 != -1) {
+					ssize_t bytes_written = write(fp1, debug_buf, strlen(debug_buf));
+					(void)bytes_written;
+					close(fp1);
+				}
+				tmp_peer->is_flip = 1;
+				tmp_peer->final_flip_state = 1;
+				tmp_peer->final_remote_id = tmp_peer->remote_id.s_addr;  /* Fixed: use tmp_peer's own remote_id */
+			}
+		}
+
+		// peer ->bgp->is_flip = 1;
+		// peer -> bgp->final_flip_state = 1;
+		// peer -> bgp->final_remote_id = peer->remote_id.s_addr;
+
+		
+
+
+	
 		BGP_TIMER_ON(peer->connection->t_routeadv, bgp_routeadv_timer,
 			     0);
 	}
