@@ -402,7 +402,7 @@ bool subgroup_packets_to_build(struct update_subgroup *subgrp);
 // 							      uint8_t is_flip, uint8_t final_flip_state, uint32_t final_remote_id);
 extern struct bpacket *subgroup_update_packet(struct update_subgroup *s,
 							      uint8_t is_flip, uint8_t final_flip_state, uint32_t final_remote_id, struct peer *source_peer);
-extern struct bpacket *subgroup_withdraw_packet(struct update_subgroup *s);
+extern struct bpacket *subgroup_withdraw_packet(struct update_subgroup *s,struct peer* source_peer);
 extern struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 						struct peer_af *paf);
 extern void bpacket_attr_vec_arr_reset(struct bpacket_attr_vec_arr *vecarr);

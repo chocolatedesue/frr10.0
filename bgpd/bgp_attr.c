@@ -5019,7 +5019,7 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 			source_route_id = attr->source_router_id;
 			destination_route_id = attr->destination_router_id;
 			link_final_state = attr->link_final_state;
-			// attr->flag &= ~ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP);
+			attr->flag &= ~ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP);
 
 			char debug_buf1[300];
 			sprintf(debug_buf1, "[%s] Trigger by received attr from [%s]\n",

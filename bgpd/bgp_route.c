@@ -5210,6 +5210,21 @@ void bgp_withdraw(struct peer *peer, const struct prefix *p,
 	/* Unlock bgp_node_get() lock. */
 	bgp_dest_unlock_node(dest);
 
+	
+	char debug_buf[300];
+	
+	char local_ip_str[INET6_ADDRSTRLEN], remote_ip_str[INET6_ADDRSTRLEN];
+	inet_ntop(AF_INET, &bgp->router_id.s_addr, local_ip_str, sizeof(local_ip_str));
+	inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_ip_str, sizeof(remote_ip_str));
+
+	sprintf(debug_buf, "[%s] processed received bgp_withdraw for [%s]", local_ip_str,
+		remote_ip_str);
+
+	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+	close(fp1);
+
+
 	return;
 }
 

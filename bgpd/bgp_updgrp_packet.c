@@ -938,6 +938,24 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp, uint8_t i
 		pkt = bpacket_queue_add(SUBGRP_PKTQ(subgrp), packet, &vecarr);
 		stream_reset(s);
 		stream_reset(snlri);
+
+		char debug_buf[500];
+		char local_ip_str[INET_ADDRSTRLEN],
+			remote_ip_str[INET_ADDRSTRLEN], src_router_id_str[INET_ADDRSTRLEN],dst_router_id_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &source_peer->bgp->router_id.s_addr,
+			  src_router_id_str, sizeof(src_router_id_str));
+		inet_ntop(AF_INET, &(source_peer->final_remote_id),
+			  dst_router_id_str, sizeof(dst_router_id_str));
+		inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
+			  local_ip_str, sizeof(local_ip_str));
+		inet_ntop(AF_INET, &source_peer->remote_id.s_addr,
+			  remote_ip_str, sizeof(remote_ip_str));
+		sprintf(debug_buf, "[%s] Generated update packet to [%s]: source_router_id: %s, dst_router_id: %s\n",
+   local_ip_str, remote_ip_str, src_router_id_str, dst_router_id_str);
+		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		write(fp1, debug_buf, strlen(debug_buf));
+		close(fp1);
+
 		return pkt;
 	}
 	return NULL;
@@ -953,7 +971,7 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp, uint8_t i
     2-octet withdrawn route length (=0) | 2-octet attrlen |
      mp_unreach attr type | attr len | afi | safi | withdrawn prefixes
 */
-struct bpacket *subgroup_withdraw_packet(struct update_subgroup *subgrp)
+struct bpacket *subgroup_withdraw_packet(struct update_subgroup *subgrp, struct peer* source_peer)
 {
 	struct bpacket *pkt;
 	struct stream *s;
@@ -991,8 +1009,12 @@ struct bpacket *subgroup_withdraw_packet(struct update_subgroup *subgrp)
 	stream_reset(s);
 	addpath_capable = bgp_addpath_encode_tx(peer, afi, safi);
 	addpath_overhead = addpath_capable ? BGP_ADDPATH_ID_LEN : 0;
-
+   int flag = 0;
 	while ((adv = bgp_adv_fifo_first(&subgrp->sync->withdraw)) != NULL) {
+		if (!flag) {
+			flag = 1;
+		}
+		
 		const struct prefix *dest_p;
 
 		assert(adv->dest);
@@ -1099,6 +1121,24 @@ struct bpacket *subgroup_withdraw_packet(struct update_subgroup *subgrp)
 		pkt = bpacket_queue_add(SUBGRP_PKTQ(subgrp), stream_dup(s),
 					NULL);
 		stream_reset(s);
+
+				char debug_buf[500];
+		char local_ip_str[INET_ADDRSTRLEN],
+			remote_ip_str[INET_ADDRSTRLEN], src_router_id_str[INET_ADDRSTRLEN],dst_router_id_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &source_peer->bgp->router_id.s_addr,
+			  src_router_id_str, sizeof(src_router_id_str));
+		inet_ntop(AF_INET, &source_peer->remote_id.s_addr,
+			  dst_router_id_str, sizeof(dst_router_id_str));
+		inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
+			  local_ip_str, sizeof(local_ip_str));
+		inet_ntop(AF_INET, &peer->remote_id.s_addr,
+			  remote_ip_str, sizeof(remote_ip_str));
+		sprintf(debug_buf, "[%s] Generated Withdraw packet to [%s]: source_router_id: %s, dst_router_id: %s\n",
+   local_ip_str, remote_ip_str, src_router_id_str, dst_router_id_str);
+		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		write(fp1, debug_buf, strlen(debug_buf));
+		close(fp1);
+
 		return pkt;
 	}
 

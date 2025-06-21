@@ -516,7 +516,7 @@ void bgp_generate_updgrp_packets(struct event *thread)
 			 */
 			if (!next_pkt || !next_pkt->buffer) {
 				next_pkt = subgroup_withdraw_packet(
-					PAF_SUBGRP(paf));
+					PAF_SUBGRP(paf), peer);
 				if (!next_pkt || !next_pkt->buffer)
 					subgroup_update_packet(PAF_SUBGRP(paf),0,0,0,peer);
 				next_pkt = paf->next_pkt_to_send;
