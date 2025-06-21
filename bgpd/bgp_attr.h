@@ -322,10 +322,13 @@ struct attr {
 	/* AIGP Metric */
 	uint64_t aigp_metric;
 
-	/* BGP link state flipping */
+	/* Source Router ID for BGP link state flipping */
 	uint32_t source_router_id;
+	/* Destination Router ID for BGP link state flipping */
 	uint32_t destination_router_id;
-	uint8_t link_state_id;
+	/* Link State ID for BGP link state flipping */
+	uint8_t link_final_state;
+
 };
 
 /* rmap_change_flags definition */
@@ -587,6 +590,7 @@ static inline struct transit *bgp_attr_get_transit(const struct attr *attr)
 	return attr->transit;
 }
 
+
 static inline void bgp_attr_set_transit(struct attr *attr,
 					struct transit *transit)
 {
@@ -654,5 +658,36 @@ bgp_attr_set_vnc_subtlvs(struct attr *attr,
 }
 
 extern bool route_matches_soo(struct bgp_path_info *pi, struct ecommunity *soo);
+
+/* BGP link state flipping attribute accessors */
+static inline uint32_t bgp_attr_get_source_router_id(const struct attr *attr)
+{
+	return attr->source_router_id;
+}
+
+static inline void bgp_attr_set_source_router_id(struct attr *attr, uint32_t source_router_id)
+{
+	attr->source_router_id = source_router_id;
+}
+
+static inline uint32_t bgp_attr_get_destination_router_id(const struct attr *attr)
+{
+	return attr->destination_router_id;
+}
+
+static inline void bgp_attr_set_destination_router_id(struct attr *attr, uint32_t destination_router_id)
+{
+	attr->destination_router_id = destination_router_id;
+}
+
+static inline uint8_t bgp_attr_get_link_final_state(const struct attr *attr)
+{
+	return attr->link_final_state;
+}
+
+static inline void bgp_attr_set_link_final_state(struct attr *attr, uint8_t link_final_state)
+{
+	attr->link_final_state = link_final_state;
+}
 
 #endif /* _QUAGGA_BGP_ATTR_H */

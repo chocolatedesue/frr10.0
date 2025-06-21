@@ -2546,7 +2546,7 @@ static int bgp_update_receive(struct peer_connection *connection,
 		// int source_route_id = -1, destination_route_id = -1, link_state_id = 1;
 		int source_route_id = attr.source_router_id, 
 			destination_route_id = attr.destination_router_id, 
-			link_state_id = attr.link_state_id;
+			link_state_id = attr.link_final_state;
 		char local_route_id_str[INET_ADDRSTRLEN], src_route_id_str[INET_ADDRSTRLEN],dst_route_id_str[INET_ADDRSTRLEN], remote_route_id_str[INET_ADDRSTRLEN];
 		inet_ntop(AF_INET, &peer->local_id.s_addr, local_route_id_str, sizeof(local_route_id_str));
 		inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_route_id_str, sizeof(remote_route_id_str));
