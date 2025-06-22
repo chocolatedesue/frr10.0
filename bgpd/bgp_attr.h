@@ -326,6 +326,8 @@ struct attr {
 	uint32_t source_router_id;
 	/* Destination Router ID for BGP link state flipping */
 	uint32_t destination_router_id;
+
+	uint32_t recieved_from_ip;
 	/* Link State ID for BGP link state flipping */
 	uint8_t link_final_state;
 

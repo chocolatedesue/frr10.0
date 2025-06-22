@@ -812,9 +812,29 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp, uint8_t i
 		}
 
 		if ((afi == AFI_IP && safi == SAFI_UNICAST)
-		    && !peer_cap_enhe(peer, afi, safi))
+		    && !peer_cap_enhe(peer, afi, safi)){
 			stream_put_prefix_addpath(s, dest_p, addpath_capable,
 						  addpath_tx_id);
+						
+			
+		char debug_buf[500];
+		char local_ip_str[INET_ADDRSTRLEN],
+			remote_ip_str[INET_ADDRSTRLEN], src_router_id_str[INET_ADDRSTRLEN],dst_router_id_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &source_peer->bgp->router_id.s_addr,
+			  src_router_id_str, sizeof(src_router_id_str));
+		inet_ntop(AF_INET, &(source_peer->final_remote_id),
+			  dst_router_id_str, sizeof(dst_router_id_str));
+		inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
+			  local_ip_str, sizeof(local_ip_str));
+		inet_ntop(AF_INET, &source_peer->remote_id.s_addr,
+			  remote_ip_str, sizeof(remote_ip_str));
+		sprintf(debug_buf, "[%s] Generated update packet to [%s]: source_router_id: %s, dst_router_id: %s, is_flip = %u\n",
+   local_ip_str, remote_ip_str, src_router_id_str, dst_router_id_str, source_peer->is_flip);
+		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		write(fp1, debug_buf, strlen(debug_buf));
+		close(fp1);						
+
+						}
 		else {
 			/* Encode the prefix in MP_REACH_NLRI attribute */
 			if (dest->pdest)
@@ -939,22 +959,6 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp, uint8_t i
 		stream_reset(s);
 		stream_reset(snlri);
 
-		char debug_buf[500];
-		char local_ip_str[INET_ADDRSTRLEN],
-			remote_ip_str[INET_ADDRSTRLEN], src_router_id_str[INET_ADDRSTRLEN],dst_router_id_str[INET_ADDRSTRLEN];
-		inet_ntop(AF_INET, &source_peer->bgp->router_id.s_addr,
-			  src_router_id_str, sizeof(src_router_id_str));
-		inet_ntop(AF_INET, &(source_peer->final_remote_id),
-			  dst_router_id_str, sizeof(dst_router_id_str));
-		inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
-			  local_ip_str, sizeof(local_ip_str));
-		inet_ntop(AF_INET, &source_peer->remote_id.s_addr,
-			  remote_ip_str, sizeof(remote_ip_str));
-		sprintf(debug_buf, "[%s] Generated update packet to [%s]: source_router_id: %s, dst_router_id: %s\n",
-   local_ip_str, remote_ip_str, src_router_id_str, dst_router_id_str);
-		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
-		write(fp1, debug_buf, strlen(debug_buf));
-		close(fp1);
 
 		return pkt;
 	}
@@ -1127,14 +1131,14 @@ struct bpacket *subgroup_withdraw_packet(struct update_subgroup *subgrp, struct 
 			remote_ip_str[INET_ADDRSTRLEN], src_router_id_str[INET_ADDRSTRLEN],dst_router_id_str[INET_ADDRSTRLEN];
 		inet_ntop(AF_INET, &source_peer->bgp->router_id.s_addr,
 			  src_router_id_str, sizeof(src_router_id_str));
-		inet_ntop(AF_INET, &source_peer->remote_id.s_addr,
+		inet_ntop(AF_INET, &source_peer->final_remote_id,
 			  dst_router_id_str, sizeof(dst_router_id_str));
 		inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
 			  local_ip_str, sizeof(local_ip_str));
-		inet_ntop(AF_INET, &peer->remote_id.s_addr,
+		inet_ntop(AF_INET, &source_peer->remote_id.s_addr,
 			  remote_ip_str, sizeof(remote_ip_str));
-		sprintf(debug_buf, "[%s] Generated Withdraw packet to [%s]: source_router_id: %s, dst_router_id: %s\n",
-   local_ip_str, remote_ip_str, src_router_id_str, dst_router_id_str);
+		sprintf(debug_buf, "[%s] Generated Withdraw packet to [%s]: source_router_id: %s, dst_router_id: %s, is_flip: %u\n",
+   local_ip_str, remote_ip_str, src_router_id_str, dst_router_id_str, peer->is_flip);
 		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 		write(fp1, debug_buf, strlen(debug_buf));
 		close(fp1);

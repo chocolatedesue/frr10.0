@@ -3390,7 +3390,13 @@ bgp_attr_link_state_flip_parse(struct bgp_attr_parser_args *args)
 	attr->source_router_id = source_route_id;
 	attr->destination_router_id = destination_route_id;
 	attr->link_final_state = link_final_state;
+	attr -> recieved_from_ip= peer-> remote_id.s_addr;
 
+	// peer -> recieved_from_ip = peer->remote_id.s_addr;
+	peer -> final_flip_state = link_final_state;
+	peer -> final_remote_id = destination_route_id;
+
+	
 	
 	char debug_buf[300];
 	char local_route_id_str[INET_ADDRSTRLEN], src_route_id_str[INET_ADDRSTRLEN],dst_route_id_str[INET_ADDRSTRLEN], remote_route_id_str[INET_ADDRSTRLEN];
@@ -4999,8 +5005,8 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 		if (source_peer && source_peer -> is_flip)
 		{
 
-			source_route_id = source_peer->local_id.s_addr;
-			destination_route_id = source_peer->remote_id.s_addr;
+			source_route_id = source_peer->bgp->router_id.s_addr;
+			destination_route_id = source_peer->final_remote_id;
 			link_final_state = source_peer->final_flip_state;	
 
 			char debug_buf2[300];
@@ -5019,9 +5025,11 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 			source_route_id = attr->source_router_id;
 			destination_route_id = attr->destination_router_id;
 			link_final_state = attr->link_final_state;
-			attr->flag &= ~ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP);
+			// attr->flag &= ~ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP);
+			
 
 			char debug_buf1[300];
+			inet_ntop(AF_INET, &(attr->recieved_from_ip), remote_route_id_str, sizeof(remote_route_id_str));
 			sprintf(debug_buf1, "[%s] Trigger by received attr from [%s]\n",
 				local_route_id_str, remote_route_id_str);
 			int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
@@ -5029,13 +5037,13 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 			close(fp1);
 
 		}
-		
-			source_peer -> is_flip = 0;
-			source_peer -> final_flip_state = 0;
-			source_peer -> final_remote_id = 0;
+	
+		source_peer -> is_flip = 0;
+		source_peer -> final_flip_state = 0;
+		source_peer -> final_remote_id = 0;
 
 		
-		stream_putc(s, BGP_ATTR_FLAG_TRANS);
+		stream_putc(s, BGP_ATTR_FLAG_TRANS | BGP_ATTR_FLAG_OPTIONAL);
 		stream_putc(s, BGP_ATTR_LINK_STATE_FLIP);
 		stream_putc(s, 9); // Length
 		// 9 = 4 (source_route_id) + 4 (dest_route_id) + 1 
