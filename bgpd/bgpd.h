@@ -1195,8 +1195,9 @@ struct peer {
 	struct bgp *bgp;
 	uint8_t is_flip;
 	uint8_t is_flip_by_attr;
-	uint32_t final_flip_state;
+	uint8_t final_flip_state;
 	uint32_t final_remote_id;
+	uint32_t fianl_source_id;
 	
 
 	/* reference count, primarily to allow bgp_process'ing of route_node's
