@@ -4938,12 +4938,14 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 
 				char debug_buf2[300];
 				// inet_ntop(AF_INET, &(source_peer->remote_id.s_addr), remote_route_id_str, sizeof(remote_route_id_str));
-				sprintf(debug_buf2, "[%s] Trigger by self flip: \n",
-				local_route_id_str);
+				sprintf(debug_buf2, "[%s] Trigger by self flip: source_peer address %p\n",
+				local_route_id_str, (void*)source_peer);
 
 				int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 				int write_n1 = write(fp1, debug_buf2, strlen(debug_buf2));
 				close(fp1);
+				source_peer->is_flip = 0;
+				source_peer->is_flip_by_attr = 0;
 			} else {
 				// source_route_id = attr->source_router_id;
 				// destination_route_id = attr->destination_router_id;
@@ -4951,20 +4953,22 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 				// attr->flag &= ~ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP);
 
 				char debug_buf1[300];
-				sprintf(debug_buf1, "[%s] Trigger by received attr from [%s]\n",
-					local_route_id_str, remote_route_id_str);
+				sprintf(debug_buf1, "[%s] Trigger by received attr from [%s]: source_peer address %p\n",
+					local_route_id_str, remote_route_id_str, (void*)source_peer);
 				int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 				int write_n1 = write(fp1, debug_buf1, strlen(debug_buf1));
 				close(fp1);
+				source_peer->is_flip_by_attr = 0;
 			}
 
 
-			source_peer -> is_flip = 0;
+			
 			source_peer -> final_flip_state = 0;
 			source_peer -> final_remote_id = 0;
+			
 
 
-			stream_putc(s, BGP_ATTR_FLAG_TRANS );
+			stream_putc(s, BGP_ATTR_FLAG_TRANS | BGP_ATTR_FLAG_OPTIONAL );
 			stream_putc(s, BGP_ATTR_LINK_STATE_FLIP);
 			stream_putc(s, 9); // Length
 			// 9 = 4 (source_route_id) + 4 (dest_route_id) + 1 
