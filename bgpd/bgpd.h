@@ -1193,6 +1193,11 @@ extern void bgp_peer_connection_buffers_free(struct peer_connection *connection)
 struct peer {
 	/* BGP structure.  */
 	struct bgp *bgp;
+	uint8_t is_flip;
+	uint8_t is_flip_by_attr;
+	uint32_t final_flip_state;
+	uint32_t final_remote_id;
+	
 
 	/* reference count, primarily to allow bgp_process'ing of route_node's
 	 * to be done after a struct peer is deleted.
@@ -1952,6 +1957,7 @@ struct bgp_nlri {
 #define BGP_ATTR_OTC                            35
 #define BGP_ATTR_PREFIX_SID                     40
 #define BGP_ATTR_SRTE_COLOR                     51
+#define BGP_ATTR_LINK_STATE_FLIP			 	56
 #ifdef ENABLE_BGP_VNC_ATTR
 #define BGP_ATTR_VNC                           255
 #endif
