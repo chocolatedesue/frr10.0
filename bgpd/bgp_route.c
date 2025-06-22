@@ -5052,6 +5052,20 @@ void bgp_update(struct peer *peer, const struct prefix *p, uint32_t addpath_id,
 	}
 #endif
 
+	
+	char debug_buf[300];
+	
+	char local_ip_str[INET6_ADDRSTRLEN], remote_ip_str[INET6_ADDRSTRLEN];
+	inet_ntop(AF_INET, &bgp->router_id.s_addr, local_ip_str, sizeof(local_ip_str));
+	inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_ip_str, sizeof(remote_ip_str));
+
+	sprintf(debug_buf, "[%s] processed received bgp_update for [%s]\n", local_ip_str,
+		remote_ip_str);
+
+	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+	close(fp1);
+
 	return;
 
 /* This BGP update is filtered.  Log the reason then update BGP
@@ -5115,6 +5129,20 @@ filtered:
 	}
 #endif
 
+	{
+	char debug_buf[300];
+	
+	char local_ip_str[INET6_ADDRSTRLEN], remote_ip_str[INET6_ADDRSTRLEN];
+	inet_ntop(AF_INET, &bgp->router_id.s_addr, local_ip_str, sizeof(local_ip_str));
+	inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_ip_str, sizeof(remote_ip_str));
+
+	sprintf(debug_buf, "[%s] processed FILITER received bgp_update for [%s]\n", local_ip_str,
+		remote_ip_str);
+
+	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+	close(fp1);
+}
 	return;
 }
 

@@ -3395,6 +3395,7 @@ bgp_attr_link_state_flip_parse(struct bgp_attr_parser_args *args)
 	// peer -> recieved_from_ip = peer->remote_id.s_addr;
 	peer -> final_flip_state = link_final_state;
 	peer -> final_remote_id = destination_route_id;
+	peer -> is_triggered_by_attr = 1;
 
 	
 	
@@ -4990,82 +4991,138 @@ bgp_size_t bgp_packet_attribute(struct bgp *bgp, struct peer *peer,
 	// close(fp1);
 
 }
-
-	
-	if ( (source_peer && source_peer -> is_flip) || (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP))) {
-
+	if (source_peer && (source_peer -> is_flip || source_peer -> is_triggered_by_attr)) {
 		char local_route_id_str[INET_ADDRSTRLEN], src_route_id_str[INET_ADDRSTRLEN],dst_route_id_str[INET_ADDRSTRLEN],remote_route_id_str[INET_ADDRSTRLEN];
 		inet_ntop(AF_INET, &(bgp->router_id), local_route_id_str, sizeof(local_route_id_str));
 		inet_ntop(AF_INET, &(source_peer->remote_id), remote_route_id_str, sizeof(remote_route_id_str));
-		
-		
 		uint32_t source_route_id = 0;
 		uint32_t destination_route_id = 0;
 		uint8_t link_final_state = 0;
-		if (source_peer && source_peer -> is_flip)
-		{
-
-			source_route_id = source_peer->bgp->router_id.s_addr;
-			destination_route_id = source_peer->final_remote_id;
-			link_final_state = source_peer->final_flip_state;	
-
+		if (source_peer -> is_flip) {
+	
 			char debug_buf2[300];
-			// inet_ntop(AF_INET, &(source_peer->remote_id.s_addr), remote_route_id_str, sizeof(remote_route_id_str));
-			sprintf(debug_buf2, "[%s] Trigger by self flip: \n",
-			local_route_id_str);
-				
+			// inet_ntop(AF_INET, &(source_peer->remote_id.s_addr), remote
+			// route_id_str, sizeof(remote_route_id_str));
+			sprintf(debug_buf2, "[%s] Trigger by self flip with [%s]: \n",
+				local_route_id_str, remote_route_id_str);
 			int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 			int write_n1 = write(fp1, debug_buf2, strlen(debug_buf2));
-			close(fp1);
-
-		
-
+			close(fp1);	
 		} else {
-
-			source_route_id = attr->source_router_id;
-			destination_route_id = attr->destination_router_id;
-			link_final_state = attr->link_final_state;
-			// attr->flag &= ~ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP);
-			
-
 			char debug_buf1[300];
-			inet_ntop(AF_INET, &(attr->recieved_from_ip), remote_route_id_str, sizeof(remote_route_id_str));
+			// inet_ntop(AF_INET, &(source_peer->remote_id), remote_route_id_str, sizeof(remote_route_id_str));
 			sprintf(debug_buf1, "[%s] Trigger by received attr from [%s]\n",
 				local_route_id_str, remote_route_id_str);
 			int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 			int write_n1 = write(fp1, debug_buf1, strlen(debug_buf1));
 			close(fp1);
-
 		}
-	
+
+		source_route_id = source_peer->bgp->router_id.s_addr;
+		destination_route_id = source_peer->final_remote_id;
+		link_final_state = source_peer->final_flip_state;
 		source_peer -> is_flip = 0;
 		source_peer -> final_flip_state = 0;
 		source_peer -> final_remote_id = 0;
+		source_peer -> is_triggered_by_attr = 0;
 
-		
-		stream_putc(s, BGP_ATTR_FLAG_TRANS | BGP_ATTR_FLAG_OPTIONAL);
 		stream_putc(s, BGP_ATTR_LINK_STATE_FLIP);
 		stream_putc(s, 9); // Length
-		// 9 = 4 (source_route_id) + 4 (dest_route_id) + 1 
+		// 9 = 4 (source_route_id) + 4 (dest_route
 		stream_putl(s, source_route_id);
 		stream_putl(s, destination_route_id);
 		stream_putc(s, link_final_state);
-
 		char debug_buf[300];
-		
 		inet_ntop(AF_INET, &source_route_id, src_route_id_str, sizeof(src_route_id_str));
 		inet_ntop(AF_INET, &destination_route_id, dst_route_id_str, sizeof(dst_route_id_str));
 		// Log the detected link-state flip attribute
-
 		sprintf(debug_buf, "[%s] SEND flip attribute to [%s]: source_route_id=%s, destination_route_id=%s, link_final_state=%u, bgp->address: %p, bgp->peer address: %p, source_peer: %p\n",
-				local_route_id_str, remote_route_id_str,
-					src_route_id_str, dst_route_id_str, link_final_state, (void*)bgp ,(void*)bgp->peer, (void*)source_peer);
-
+			local_route_id_str, remote_route_id_str,
+			src_route_id_str, dst_route_id_str, link_final_state,
+			(void*)bgp ,(void*)bgp->peer, (void*)source_peer);
 		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 		int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
 		close(fp1);
+		
+
 
 	}
+
+	
+	// if ( (source_peer && source_peer -> is_flip) || (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP))) {
+
+	// 	char local_route_id_str[INET_ADDRSTRLEN], src_route_id_str[INET_ADDRSTRLEN],dst_route_id_str[INET_ADDRSTRLEN],remote_route_id_str[INET_ADDRSTRLEN];
+	// 	inet_ntop(AF_INET, &(bgp->router_id), local_route_id_str, sizeof(local_route_id_str));
+	// 	inet_ntop(AF_INET, &(source_peer->remote_id), remote_route_id_str, sizeof(remote_route_id_str));
+		
+		
+	// 	uint32_t source_route_id = 0;
+	// 	uint32_t destination_route_id = 0;
+	// 	uint8_t link_final_state = 0;
+	// 	if (source_peer && source_peer -> is_flip)
+	// 	{
+
+	// 		source_route_id = source_peer->bgp->router_id.s_addr;
+	// 		destination_route_id = source_peer->final_remote_id;
+	// 		link_final_state = source_peer->final_flip_state;	
+
+	// 		char debug_buf2[300];
+	// 		// inet_ntop(AF_INET, &(source_peer->remote_id.s_addr), remote_route_id_str, sizeof(remote_route_id_str));
+	// 		sprintf(debug_buf2, "[%s] Trigger by self flip: \n",
+	// 		local_route_id_str);
+				
+	// 		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	// 		int write_n1 = write(fp1, debug_buf2, strlen(debug_buf2));
+	// 		close(fp1);
+
+		
+
+	// 	} else {
+
+	// 		source_route_id = attr->source_router_id;
+	// 		destination_route_id = attr->destination_router_id;
+	// 		link_final_state = attr->link_final_state;
+	// 		// attr->flag &= ~ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP);
+			
+
+	// 		char debug_buf1[300];
+	// 		inet_ntop(AF_INET, &(attr->recieved_from_ip), remote_route_id_str, sizeof(remote_route_id_str));
+	// 		sprintf(debug_buf1, "[%s] Trigger by received attr from [%s]\n",
+	// 			local_route_id_str, remote_route_id_str);
+	// 		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	// 		int write_n1 = write(fp1, debug_buf1, strlen(debug_buf1));
+	// 		close(fp1);
+
+	// 	}
+	
+	// 	source_peer -> is_flip = 0;
+	// 	source_peer -> final_flip_state = 0;
+	// 	source_peer -> final_remote_id = 0;
+
+		
+	// 	stream_putc(s, BGP_ATTR_FLAG_TRANS | BGP_ATTR_FLAG_OPTIONAL);
+	// 	stream_putc(s, BGP_ATTR_LINK_STATE_FLIP);
+	// 	stream_putc(s, 9); // Length
+	// 	// 9 = 4 (source_route_id) + 4 (dest_route_id) + 1 
+	// 	stream_putl(s, source_route_id);
+	// 	stream_putl(s, destination_route_id);
+	// 	stream_putc(s, link_final_state);
+
+	// 	char debug_buf[300];
+		
+	// 	inet_ntop(AF_INET, &source_route_id, src_route_id_str, sizeof(src_route_id_str));
+	// 	inet_ntop(AF_INET, &destination_route_id, dst_route_id_str, sizeof(dst_route_id_str));
+	// 	// Log the detected link-state flip attribute
+
+	// 	sprintf(debug_buf, "[%s] SEND flip attribute to [%s]: source_route_id=%s, destination_route_id=%s, link_final_state=%u, bgp->address: %p, bgp->peer address: %p, source_peer: %p\n",
+	// 			local_route_id_str, remote_route_id_str,
+	// 				src_route_id_str, dst_route_id_str, link_final_state, (void*)bgp ,(void*)bgp->peer, (void*)source_peer);
+
+	// 	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	// 	int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+	// 	close(fp1);
+
+	// }
 
 
 	// if (bgp->is_flip && bgp ->is_flip == 1 || (attr->flag & ATTR_FLAG_BIT(BGP_ATTR_LINK_STATE_FLIP))) {

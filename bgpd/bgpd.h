@@ -1204,6 +1204,7 @@ struct peer {
 	uint8_t is_flip; 
 	uint8_t final_flip_state;
 	uint32_t final_remote_id;
+	uint8_t is_triggered_by_attr ;
 
 
 	/* BGP structure.  */
