@@ -5,6 +5,8 @@
  * Copyright (C) 1999 Kunihiro Ishiguro
  */
 
+#include <fcntl.h>
+#include <stdint.h>
 #include <zebra.h>
 #include <sys/time.h>
 
@@ -3815,6 +3817,37 @@ int bgp_capability_receive(struct peer_connection *connection,
 	return bgp_capability_msg_parse(peer, pnt, size);
 }
 
+int bgp_linkstate_receive(struct peer_connection *connection,
+				 struct peer *peer, bgp_size_t size)
+{
+
+	struct stream *s;
+	uint8_t *end;
+	s = peer->curr;
+	end = stream_pnt(s) + size;
+
+	uint32_t src_router_id, dst_router_id;
+	uint8_t final_flip_id;
+	src_router_id = stream_getl(s);
+	dst_router_id = stream_getl(s);
+	final_flip_id = stream_getc(s);
+
+
+
+	
+	char debug_buf[256], src_router_id_str[INET_ADDRSTRLEN], dst_router_id_str[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &src_router_id, src_router_id_str, sizeof(src_router_id_str));
+	inet_ntop(AF_INET, &dst_router_id, dst_router_id_str
+, sizeof(dst_router_id_str));
+
+	snprintf(debug_buf, sizeof(debug_buf),
+		 "[%s] rcv LINKSTATE, src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
+		 peer->host, src_router_id_str, dst_router_id_str, final_flip_id);
+	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	write (fp1, debug_buf, strlen(debug_buf));
+	close(fp1);
+	return BGP_PACKET_NOOP;
+}
 /**
  * Processes a peer's input buffer.
  *
@@ -3832,7 +3865,7 @@ int bgp_capability_receive(struct peer_connection *connection,
 void bgp_process_packet(struct event *thread)
 {
 	/* Yes first of all get peer pointer. */
-	struct peer *peer;	// peer
+	struct peer * peer;	// peer
 	struct peer_connection *connection;
 	uint32_t rpkt_quanta_old; // how many packets to read
 	int fsm_update_result;    // return code of bgp_event_update()
@@ -3947,6 +3980,17 @@ void bgp_process_packet(struct event *thread)
 					"%s: BGP CAPABILITY receipt failed for peer: %s",
 					__func__, peer->host);
 			break;
+		case BGP_MSG_LINK_STATE:
+			frrtrace(2, frr_bgp, linkstate_process, peer, size);
+			atomic_fetch_add_explicit(&peer->linkstate_in, 1,
+						  memory_order_relaxed);
+			mprc = bgp_linkstate_receive(connection, peer, size);
+			if (mprc == BGP_Stop)
+				flog_err(
+					EC_BGP_LINKSTATE_RCV,
+					"%s: BGP LINKSTATE receipt failed for peer: %s",
+					__func__, peer->host);
+			break;
 		default:
 			/* Suppress uninitialized variable warning */
 			mprc = 0;
@@ -4035,4 +4079,43 @@ void bgp_packet_process_error(struct event *thread)
 	}
 
 	bgp_event_update(connection, code);
+}
+
+// 大端序写入
+void write_uint32_be(uint8_t *buffer, uint32_t value) {
+    buffer[0] = (value >> 24) & 0xFF;
+    buffer[1] = (value >> 16) & 0xFF;
+    buffer[2] = (value >> 8) & 0xFF;
+    buffer[3] = value & 0xFF;
+}
+
+bool  send_custom_bgp_data(struct peer_connection *connection, 
+                         uint8_t msg_type, 
+                         const void *data, 
+                         size_t data_len) 
+{
+    struct peer *peer = connection->peer;
+    struct stream *s;
+    
+    // 1. 创建数据包
+    s = stream_new(BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE);
+    if (!s) {
+        flog_err(EC_BGP_PKT_PROCESS, "Failed to allocate stream");
+        return false;
+    }
+    
+    // 2. 设置BGP头部（marker + 长度占位符 + 类型）
+    bgp_packet_set_marker(s, msg_type);
+    
+    // 3. 添加自定义数据
+    if (data && data_len > 0) {
+        stream_put(s, data, data_len);
+    }
+    
+    // 4. 设置正确的数据包长度
+    bgp_packet_set_size(s);
+    
+    // 5. 添加到输出队列并触发发送
+    bgp_packet_add(connection, peer, s);
+    bgp_writes_on(connection);
 }

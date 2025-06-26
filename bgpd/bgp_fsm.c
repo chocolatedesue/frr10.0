@@ -4,6 +4,7 @@
  * Copyright (C) 1996, 97, 98 Kunihiro Ishiguro
  */
 
+#include <time.h>
 #include <zebra.h>
 
 #include "linklist.h"
@@ -2320,16 +2321,19 @@ bgp_establish(struct peer_connection *connection)
 	 */
 	if (!bgp_update_delay_active(peer->bgp)) {
 		EVENT_OFF(peer->connection->t_routeadv);
-		BGP_TIMER_ON(peer->connection->t_routeadv, bgp_routeadv_timer,
-			     0);
 
-		  struct listnode *node, *nnode;
+
+		struct listnode *node, *nnode;
 		struct peer *tmp_peer;
 
 
 		/* Iterate through all peers in the BGP instance */
 		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
 			/* Check peer connection status */
+			
+			// if (tmp_peer == peer)
+			// 	continue;  /* Skip the current peer */
+
 			if (tmp_peer->connection->status == Established) {
 				/* Use debug_buf to write to file */
 				char debug_buf[512];  /* Increased buffer size */
@@ -2354,11 +2358,19 @@ bgp_establish(struct peer_connection *connection)
 					(void)bytes_written;
 					close(fp1);
 				}
-				tmp_peer->is_flip = 1;
-				tmp_peer->final_flip_state = 1;
-				tmp_peer->final_remote_id = tmp_peer->remote_id.s_addr;  /* Fixed: use tmp_peer's own remote_id */
-			}
+				//  4 + 4 + 1, src_router_id, dst_router_id, final_flip_id
+				// 我想把上面的星系写到一个 结构里
+				uint8_t data[9];
+				write_uint32_be(data, peer->bgp->router_id.s_addr);
+				write_uint32_be(data + 4, tmp_peer->remote_id.s_addr);
+				data[8] = 0x01;  // final_flip_id
+
+				
+				send_custom_bgp_data(tmp_peer->connection, BGP_MSG_LINK_STATE,data, sizeof(data));
+				}
 		}
+				BGP_TIMER_ON(peer->connection->t_routeadv, bgp_routeadv_timer,
+			     0);
 	}
 
 	if (peer->doppelganger &&
