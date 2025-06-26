@@ -42,7 +42,8 @@
 #include "bgpd/bgp_io.h"
 #include "bgpd/bgp_zebra.h"
 #include "bgpd/bgp_vty.h"
-#include <asm-generic/fcntl.h>
+// #include <asm-generic/fcntl.h>
+#include <fcntl.h>
 
 DEFINE_HOOK(peer_backward_transition, (struct peer * peer), (peer));
 DEFINE_HOOK(peer_status_changed, (struct peer * peer), (peer));

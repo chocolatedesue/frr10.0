@@ -41,7 +41,8 @@
 #include "bgp_evpn.h"
 #include "bgp_flowspec_private.h"
 #include "bgp_mac.h"
-#include <asm-generic/fcntl.h>
+// #include <asm-generic/fcntl.h>
+#include <fcntl.h>
 
 /* Attribute strings for logging. */
 static const struct message attr_str[] = {
