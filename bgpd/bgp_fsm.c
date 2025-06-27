@@ -4,6 +4,7 @@
  * Copyright (C) 1996, 97, 98 Kunihiro Ishiguro
  */
 
+#include <fcntl.h>
 #include <zebra.h>
 
 #include "linklist.h"
@@ -1277,7 +1278,47 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 	/* Fire backward transition hook if that's the case */
 	if (connection->ostatus == Established &&
 	    connection->status != Established)
+	{
+		struct listnode *node, *nnode;
+		struct peer *tmp_peer;
 		hook_call(peer_backward_transition, peer);
+		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
+			/* Check peer connection status */
+			if (tmp_peer->connection->status == Established) {
+				// tmp_peer->is_flip = 1;
+				// tmp_peer->final_flip_state = 0;
+				// tmp_peer->final_remote_id = tmp_peer ->remote_id.s_addr;
+				/* Use debug_buf to write to file */
+				char debug_buf[400];
+				char bgp_router_id_str[INET_ADDRSTRLEN], bgp_final_remote_id_str[INET_ADDRSTRLEN],remote_is_str[INET_ADDRSTRLEN];
+
+				inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, bgp_router_id_str,
+						sizeof(bgp_router_id_str));
+				inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr, bgp_final_remote_id_str,
+						sizeof(bgp_final_remote_id_str));
+				inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_is_str,
+						sizeof(remote_is_str));
+
+				sprintf(debug_buf, "BGP [%s] IDEL; walk connected peer [%s]: "
+        "remote_id_str: %s, bgp_as: %u, bgp_address: %p, tmp_peer_address: %p, peer_address: %p\n",
+			bgp_router_id_str, bgp_final_remote_id_str, remote_is_str,
+			(unsigned int)peer->bgp->as, (void *)peer->bgp, (void *)tmp_peer, (void *)peer);
+
+				int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+				if (fp1 != -1) {
+					ssize_t bytes_written = write(fp1, debug_buf, strlen(debug_buf));
+					(void)bytes_written;
+					close(fp1);
+				}
+				uint8_t data[9];
+				write_uint32_be(data, peer->bgp->router_id.s_addr);
+				write_uint32_be(data + 4, peer->remote_id.s_addr);
+				data[8] = 0x00;  // final_flip_id
+				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof(data));
+			// bgp_notify_send_with_data(tmp_peer->connection, BGP_NOTIFY_CEASE, BGP_NOTIFY_SUBCODE_UNSPECIFIC, data, sizeof(data));
+			}
+		}
+	}	
 
 	/* Save event that caused status change. */
 	peer->last_major_event = peer->cur_event;

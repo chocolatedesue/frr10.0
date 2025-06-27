@@ -5,6 +5,7 @@
  * Copyright (C) 1999 Kunihiro Ishiguro
  */
 
+#include <fcntl.h>
 #include <zebra.h>
 #include <sys/time.h>
 
@@ -3815,6 +3816,44 @@ int bgp_capability_receive(struct peer_connection *connection,
 	return bgp_capability_msg_parse(peer, pnt, size);
 }
 
+
+int bgp_link_state_receive(struct peer_connection *connection,
+				 struct peer *peer, bgp_size_t size)
+{
+	struct stream *s;
+	uint32_t src_router_id, dst_router_id;
+	uint8_t final_flip_id;
+	char debug_buf[512];
+	char src_router_id_str[INET_ADDRSTRLEN], dst_router_id_str[INET_ADDRSTRLEN];
+	char local_router_id_str[INET_ADDRSTRLEN], remote_router_id_str[INET_ADDRSTRLEN];
+
+	s = peer->curr;
+	src_router_id = stream_getl(s);
+	dst_router_id = stream_getl(s);
+	final_flip_id = stream_getc(s);
+
+	inet_ntop (
+	AF_INET, &src_router_id, src_router_id_str, INET_ADDRSTRLEN);
+	inet_ntop (
+	AF_INET, &dst_router_id, dst_router_id_str, INET_ADDRSTRLEN);
+	inet_ntop (
+	AF_INET, &peer->bgp->router_id.s_addr, local_router_id_str,
+		INET_ADDRSTRLEN);
+	inet_ntop (
+	AF_INET, &peer->remote_id.s_addr, remote_router_id_str,
+		INET_ADDRSTRLEN);
+
+	snprintf(debug_buf, sizeof(debug_buf),
+		 "[%s] rcv LINKSTATE from [%s], src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
+		 local_router_id_str, remote_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id);
+	
+	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	write (fp1, debug_buf, strlen(debug_buf));
+	close(fp1);
+	return BGP_PACKET_NOOP;
+
+}
+
 /**
  * Processes a peer's input buffer.
  *
@@ -3947,6 +3986,17 @@ void bgp_process_packet(struct event *thread)
 					"%s: BGP CAPABILITY receipt failed for peer: %s",
 					__func__, peer->host);
 			break;
+		case BGP_MSG_LINK_STATE:
+			frrtrace(2, frr_bgp, refresh_process, peer, size);
+			atomic_fetch_add_explicit(&peer->link_state_in, 1,
+						  memory_order_relaxed);
+			mprc = bgp_link_state_receive(connection, peer, size);
+			if (mprc == BGP_Stop)
+				flog_err(
+					EC_BGP_LINK_STATE_RCV,
+					"%s: BGP LINK STATE receipt failed for peer: %s",
+					__func__, peer->host);
+			break;
 		default:
 			/* Suppress uninitialized variable warning */
 			mprc = 0;
@@ -4035,4 +4085,143 @@ void bgp_packet_process_error(struct event *thread)
 	}
 
 	bgp_event_update(connection, code);
+}
+
+
+static void bgp_write_customize(struct peer_connection *connection,
+			     struct peer *peer, uint8_t msg_type)
+{
+	int ret, val;
+	uint8_t type;
+	struct stream *s;
+
+	/* There should be at least one packet. */
+	s = stream_fifo_pop(connection->obuf);
+
+	if (!s)
+		return;
+
+	assert(stream_get_endp(s) >= BGP_HEADER_SIZE);
+
+	/*
+	 * socket is in nonblocking mode, if we can't deliver the NOTIFY, well,
+	 * we only care about getting a clean shutdown at this point.
+	 */
+	ret = write(connection->fd, STREAM_DATA(s), stream_get_endp(s));
+
+	/*
+	 * only connection reset/close gets counted as TCP_fatal_error, failure
+	 * to write the entire NOTIFY doesn't get different FSM treatment
+	 */
+	if (ret <= 0) {
+		stream_free(s);
+		BGP_EVENT_ADD(connection, TCP_fatal_error);
+		return;
+	}
+
+	/* Disable Nagle, make NOTIFY packet go out right away */
+	val = 1;
+	(void)setsockopt(connection->fd, IPPROTO_TCP, TCP_NODELAY, (char *)&val,
+			 sizeof(val));
+
+	/* Retrieve BGP packet type. */
+	stream_set_getp(s, BGP_MARKER_SIZE + 2);
+	type = stream_getc(s);
+
+	// assert(type == msg_type);
+
+	// char debug_buf[256];
+	// snprintf(debug_buf, sizeof(debug_buf),
+	// 	 "customize write success, type %d\n",
+	// 	 type);
+	// int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	// int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+	// close(fp1);
+
+	/* Type should be notify. */
+	// atomic_fetch_add_explicit(&peer->notify_out, 1, memory_order_relaxed);
+
+	/* Double start timer. */
+	peer->v_start *= 2;
+
+	/* Overflow check. */
+	if (peer->v_start >= (60 * 2))
+		peer->v_start = (60 * 2);
+
+	/*
+	 * Handle Graceful Restart case where the state changes to
+	 * Connect instead of Idle
+	 */
+	// BGP_EVENT_ADD(connection, BGP_Stop);
+
+	stream_free(s);
+}
+
+void write_uint32_be(uint8_t *buffer, uint32_t value) {
+    buffer[0] = (value >> 24) & 0xFF;
+    buffer[1] = (value >> 16) & 0xFF;
+    buffer[2] = (value >> 8) & 0xFF;
+    buffer[3] = value & 0xFF;
+}
+
+void bgp_link_state_send(struct peer_connection *connection, 
+                         uint8_t msg_type, 
+                         const void *data, 
+                         size_t data_len) 
+{
+	struct peer *peer = connection->peer;
+    struct stream *s;
+
+	char debug_buf[256], src_router_id_str[INET_ADDRSTRLEN], dst_router_id_str[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, src_router_id_str,
+			  sizeof(src_router_id_str));
+	inet_ntop(AF_INET, &peer->remote_id.s_addr, dst_router_id_str,
+			  sizeof(dst_router_id_str));
+
+
+	char type_str[256] = "Unknown";
+	
+	// TODO: Notice the boundary of bgp_type_str
+	for (int i = BGP_MSG_OPEN; i <= BGP_MSG_LINK_STATE; i++) {
+		if (msg_type == i) {
+			// type_str = bgp_type_str[i];
+			memcpy(type_str, bgp_type_str[i],
+					sizeof(type_str));	
+			break;
+		}
+	}
+
+	snprintf(debug_buf, sizeof(debug_buf),
+		 "[%s] send_custom_bgp_data to [%s], msg_type: %s, data_len: %zu\n",
+		 src_router_id_str, dst_router_id_str,
+		  type_str, data_len);
+	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	write(fp1, debug_buf, strlen(debug_buf));
+	close(fp1);
+
+
+    frr_mutex_lock_autounlock(&connection->io_mtx);
+    // 1. 创建数据包
+    s = stream_new(BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE);
+
+    // 2. 设置BGP头部（marker + 长度占位符 + 类型）
+    bgp_packet_set_marker(s, msg_type);
+
+
+    // 3. 添加自定义数据
+    if (data && data_len > 0) {
+        stream_put(s, data, data_len);
+    }
+
+    // 4. 设置正确的数据包长度
+    bgp_packet_set_size(s);
+
+	// TODO: Use better way to handle obuf
+	stream_fifo_clean(connection->obuf);
+
+	stream_fifo_push(connection->obuf, s);
+
+	bgp_write_customize(connection, peer, msg_type);
+
+
 }

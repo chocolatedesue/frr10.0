@@ -105,7 +105,7 @@ const struct message bgp_status_msg[] = {{Idle, "Idle"},
 /* BGP message type string. */
 const char *const bgp_type_str[] = {NULL,	   "OPEN",      "UPDATE",
 			      "NOTIFICATION", "KEEPALIVE", "ROUTE-REFRESH",
-			      "CAPABILITY"};
+			      "CAPABILITY", "LINKSTATE"};
 
 /* message for BGP-4 Notify */
 static const struct message bgp_notify_msg[] = {

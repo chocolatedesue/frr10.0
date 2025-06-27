@@ -587,7 +587,7 @@ static bool validate_header(struct peer_connection *connection)
 	    && type != BGP_MSG_NOTIFY && type != BGP_MSG_KEEPALIVE
 	    && type != BGP_MSG_ROUTE_REFRESH_NEW
 	    && type != BGP_MSG_ROUTE_REFRESH_OLD
-	    && type != BGP_MSG_CAPABILITY) {
+	    && type != BGP_MSG_CAPABILITY && type != BGP_MSG_LINK_STATE) {
 		if (bgp_debug_neighbor_events(peer))
 			zlog_debug("%s unknown message type 0x%02x", peer->host,
 				   type);

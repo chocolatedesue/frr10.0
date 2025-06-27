@@ -1639,6 +1639,8 @@ struct peer {
 	_Atomic uint32_t refresh_out;     /* Route Refresh output count */
 	_Atomic uint32_t dynamic_cap_in;  /* Dynamic Capability input count.  */
 	_Atomic uint32_t dynamic_cap_out; /* Dynamic Capability output count. */
+	_Atomic uint32_t link_state_in; /* Link State input count */
+	_Atomic uint32_t link_state_out; /* Link State output count */
 
 	uint32_t stat_pfx_filter;
 	uint32_t stat_pfx_aspath_loop;
@@ -1923,6 +1925,7 @@ struct bgp_nlri {
 #define	BGP_MSG_KEEPALIVE	                 4
 #define BGP_MSG_ROUTE_REFRESH_NEW                5
 #define BGP_MSG_CAPABILITY                       6
+#define BGP_MSG_LINK_STATE					  7
 #define BGP_MSG_ROUTE_REFRESH_OLD              128
 
 /* BGP open optional parameter.  */
