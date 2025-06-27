@@ -6,6 +6,8 @@
  */
 
 /* clang-format off */
+#include <fcntl.h>
+#include <stdbool.h>
 #include <zebra.h>
 #include <pthread.h>		// for pthread_mutex_unlock, pthread_mutex_lock
 #include <sys/uio.h>		// for writev
@@ -204,6 +206,20 @@ static int read_ibuf_work(struct peer_connection *connection)
 		stream_fifo_push(connection->ibuf, pkt);
 	}
 
+	if (pktsize == 28) {
+		char debug_buf[256];
+		char local_ip_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &connection->peer->bgp->router_id.s_addr,
+			  local_ip_str, sizeof(local_ip_str));
+		snprintf(debug_buf, sizeof(debug_buf),
+			 "[%s] [Event] BGP Link State INTO ibuf queue, size %u\n",
+			 local_ip_str, pktsize);
+		int fd1 = open("/home/frr/test/test.txt",
+			       O_WRONLY | O_APPEND | O_CREAT, 0666);
+		write (fd1, debug_buf, strlen(debug_buf));
+		close(fd1);
+	}
+
 	return pktsize;
 }
 
@@ -227,6 +243,7 @@ static void bgp_process_reads(struct event *thread)
 	static bool ibuf_full_logged;   /* Have we logged full already */
 	int ret = 1;
 	/* clang-format on */
+
 
 	peer = connection->peer;
 
@@ -256,12 +273,30 @@ static void bgp_process_reads(struct event *thread)
 				code, &connection->t_process_packet_error);
 		goto done;
 	}
-
+	int flag = 0;
 	while (true) {
 		ret = read_ibuf_work(connection);
-		if (ret <= 0)
-			break;
+		if (flag) {
+			char debug_buf[256];
+			char local_ip_str[INET_ADDRSTRLEN];
+			inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
+				  local_ip_str, sizeof(local_ip_str));
+			snprintf(debug_buf, sizeof(debug_buf),
+				 "[%s] [Event] BGP Link State packet read, size %u\n",
+				 local_ip_str, ret);
+			int fd1 = open("/home/frr/test/test.txt",
+				       O_WRONLY | O_APPEND | O_CREAT, 0666);
+			write(fd1, debug_buf, strlen(debug_buf));
+			close(fd1);
+		}
+		if (ret == 28) {
+			flag = 1;
+		}
 
+		if (ret <= 0){
+			// if (flag) flag = 0;
+			break;
+}
 		added_pkt = true;
 	}
 
@@ -291,7 +326,20 @@ done:
 		ringbuf_wipe(connection->ibuf_work);
 		return;
 	}
-
+	if (flag) {
+		char debug_buf[256];
+		char local_ip_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
+			  local_ip_str, sizeof(local_ip_str));
+		snprintf(debug_buf, sizeof(debug_buf),
+			 "[%s] [Event] BGP Link State packet IBUF finished, trigger bgp_process_packet, added_pkt %d\n",
+			 local_ip_str, added_pkt);
+		int fd1 = open("/home/frr/test/test.txt",
+			       O_WRONLY | O_APPEND | O_CREAT, 0666);
+		write(fd1, debug_buf, strlen(debug_buf));
+		close(fd1);
+		connection -> flag = 1;
+	}
 	event_add_read(fpt->master, bgp_process_reads, connection,
 		       connection->fd, &connection->t_read);
 	if (added_pkt)
@@ -557,6 +605,7 @@ static uint16_t bgp_read(struct peer_connection *connection, int *code_p)
  */
 static bool validate_header(struct peer_connection *connection)
 {
+
 	struct peer *peer = connection->peer;
 	uint16_t size;
 	uint8_t type;
@@ -582,12 +631,28 @@ static bool validate_header(struct peer_connection *connection)
 
 	size = ntohs(size);
 
+	if (type == BGP_MSG_LINK_STATE) {
+		char debug_buf[256];
+		char local_ip_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
+			  local_ip_str, sizeof(local_ip_str));
+		snprintf(debug_buf, sizeof(debug_buf),
+				"[%s] [Event] BGP Link State packet received, size %u\n",
+				local_ip_str,size);
+
+		int fd1 = open("/home/frr/test/test.txt",
+				 O_WRONLY | O_APPEND | O_CREAT, 0666);
+		int write_n1 = write(fd1, debug_buf, strlen(debug_buf));
+		close(fd1);
+		return true;
+	}
+
 	/* BGP type check. */
 	if (type != BGP_MSG_OPEN && type != BGP_MSG_UPDATE
 	    && type != BGP_MSG_NOTIFY && type != BGP_MSG_KEEPALIVE
 	    && type != BGP_MSG_ROUTE_REFRESH_NEW
 	    && type != BGP_MSG_ROUTE_REFRESH_OLD
-	    && type != BGP_MSG_CAPABILITY) {
+	    && type != BGP_MSG_CAPABILITY && type != BGP_MSG_LINK_STATE) {
 		if (bgp_debug_neighbor_events(peer))
 			zlog_debug("%s unknown message type 0x%02x", peer->host,
 				   type);

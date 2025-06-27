@@ -89,4 +89,7 @@ extern bool send_custom_bgp_data(struct peer_connection *connection,
                          size_t data_len);
 extern void write_uint32_be(uint8_t *buffer, uint32_t value);
 
+extern int bgp_linkstate_receive(struct peer_connection *connection,
+				 struct peer *peer, bgp_size_t size);
+
 #endif /* _QUAGGA_BGP_PACKET_H */

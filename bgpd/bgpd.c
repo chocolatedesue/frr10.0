@@ -1206,6 +1206,7 @@ struct peer_connection *bgp_peer_connection_new(struct peer *peer)
 
 	connection->peer = peer;
 	connection->fd = -1;
+	connection->flag = 0;
 
 	connection->ibuf = stream_fifo_new();
 	connection->obuf = stream_fifo_new();

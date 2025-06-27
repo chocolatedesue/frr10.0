@@ -1289,24 +1289,23 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
 			/* Check peer connection status */
 			if (tmp_peer->connection->status == Established) {
-				tmp_peer->is_flip = 1;
-				tmp_peer->final_flip_state = 0;
-				tmp_peer->final_remote_id = tmp_peer ->remote_id.s_addr;
+				// tmp_peer->is_flip = 1;
+				// tmp_peer->final_flip_state = 0;
+				// tmp_peer->final_remote_id = tmp_peer ->remote_id.s_addr;
 				/* Use debug_buf to write to file */
 				char debug_buf[400];
-				char bgp_router_id_str[INET_ADDRSTRLEN], bgp_final_remote_id_str[INET_ADDRSTRLEN];
+				char bgp_router_id_str[INET_ADDRSTRLEN], bgp_final_remote_id_str[INET_ADDRSTRLEN],remote_is_str[INET_ADDRSTRLEN];
 
 				inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, bgp_router_id_str,
 						sizeof(bgp_router_id_str));
 				inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr, bgp_final_remote_id_str,
 						sizeof(bgp_final_remote_id_str));
+				inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_is_str,
+						sizeof(remote_is_str));
 
-				sprintf(debug_buf, "BGP [%s] IDEL peer traversal found connected peer: "
-        "bgp->is_flip: %u, "
-        "bgp->final_flip_state: %u, bgp->final_remote_id: %s, "
-        "bgp_as: %u, bgp_address: %p, tmp_peer_address: %p, peer_address: %p\n",
-			bgp_router_id_str, (unsigned int)tmp_peer->is_flip,
-			(unsigned int)tmp_peer->final_flip_state, bgp_final_remote_id_str,
+				sprintf(debug_buf, "BGP [%s] IDEL peer traversal found connected peer [%s]: "
+        "remote_id_str: %s, bgp_as: %u, bgp_address: %p, tmp_peer_address: %p, peer_address: %p\n",
+			bgp_router_id_str, bgp_final_remote_id_str, remote_is_str,
 			(unsigned int)peer->bgp->as, (void *)peer->bgp, (void *)tmp_peer, (void *)peer);
 
 				int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
@@ -1315,7 +1314,12 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 					(void)bytes_written;
 					close(fp1);
 				}
-
+				uint8_t data[9];
+				write_uint32_be(data, peer->bgp->router_id.s_addr);
+				write_uint32_be(data + 4, peer->remote_id.s_addr);
+				data[8] = 0x00;  // final_flip_id
+				send_custom_bgp_data(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof(data));
+			// bgp_notify_send_with_data(tmp_peer->connection, BGP_NOTIFY_CEASE, BGP_NOTIFY_SUBCODE_UNSPECIFIC, data, sizeof(data));
 			}
 		}
 
@@ -2366,8 +2370,8 @@ bgp_establish(struct peer_connection *connection)
 				data[8] = 0x01;  // final_flip_id
 
 				
-				send_custom_bgp_data(tmp_peer->connection, BGP_MSG_LINK_STATE,data, sizeof(data));
-				}
+				// send_custom_bgp_data(tmp_peer->connection, BGP_MSG_LINK_STATE,data, sizeof(data));
+			}
 		}
 				BGP_TIMER_ON(peer->connection->t_routeadv, bgp_routeadv_timer,
 			     0);

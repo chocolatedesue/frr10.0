@@ -1148,6 +1148,7 @@ struct peer_connection {
 	enum bgp_fsm_status ostatus;
 
 	int fd;
+	int flag;
 
 	/* Thread flags */
 	_Atomic uint32_t thread_flags;

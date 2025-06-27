@@ -7,6 +7,8 @@
 
 #include <fcntl.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 #include <zebra.h>
 #include <sys/time.h>
 
@@ -783,10 +785,81 @@ static void bgp_write_notify(struct peer_connection *connection,
 	 * Handle Graceful Restart case where the state changes to
 	 * Connect instead of Idle
 	 */
-	BGP_EVENT_ADD(connection, BGP_Stop);
+	//  TODO: recover the BGP_STOP event after debugging
+	// BGP_EVENT_ADD(connection, BGP_Stop);
 
 	stream_free(s);
 }
+
+static void bgp_write_customize(struct peer_connection *connection,
+			     struct peer *peer, uint8_t msg_type)
+{
+	int ret, val;
+	uint8_t type;
+	struct stream *s;
+
+	/* There should be at least one packet. */
+	s = stream_fifo_pop(connection->obuf);
+
+	if (!s)
+		return;
+
+	assert(stream_get_endp(s) >= BGP_HEADER_SIZE);
+
+	/*
+	 * socket is in nonblocking mode, if we can't deliver the NOTIFY, well,
+	 * we only care about getting a clean shutdown at this point.
+	 */
+	ret = write(connection->fd, STREAM_DATA(s), stream_get_endp(s));
+
+	/*
+	 * only connection reset/close gets counted as TCP_fatal_error, failure
+	 * to write the entire NOTIFY doesn't get different FSM treatment
+	 */
+	if (ret <= 0) {
+		stream_free(s);
+		BGP_EVENT_ADD(connection, TCP_fatal_error);
+		return;
+	}
+
+	/* Disable Nagle, make NOTIFY packet go out right away */
+	val = 1;
+	(void)setsockopt(connection->fd, IPPROTO_TCP, TCP_NODELAY, (char *)&val,
+			 sizeof(val));
+
+	/* Retrieve BGP packet type. */
+	stream_set_getp(s, BGP_MARKER_SIZE + 2);
+	type = stream_getc(s);
+
+	// assert(type == msg_type);
+
+	char debug_buf[256];
+	snprintf(debug_buf, sizeof(debug_buf),
+		 "customize write success, type %d\n",
+		 type);
+	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
+	close(fp1);
+
+	/* Type should be notify. */
+	// atomic_fetch_add_explicit(&peer->notify_out, 1, memory_order_relaxed);
+
+	/* Double start timer. */
+	peer->v_start *= 2;
+
+	/* Overflow check. */
+	if (peer->v_start >= (60 * 2))
+		peer->v_start = (60 * 2);
+
+	/*
+	 * Handle Graceful Restart case where the state changes to
+	 * Connect instead of Idle
+	 */
+	// BGP_EVENT_ADD(connection, BGP_Stop);
+
+	stream_free(s);
+}
+
 
 /*
  * Encapsulate an original BGP CEASE Notification into Hard Reset
@@ -2548,6 +2621,68 @@ static int bgp_notify_receive(struct peer_connection *connection,
 
 	outer.code = stream_getc(peer->curr);
 	outer.subcode = stream_getc(peer->curr);
+
+	uint32_t src_rt_id = stream_getl(peer->curr); /* Skip length field. */
+	uint32_t dst_router_id = stream_getl(peer->curr); /* Skip length field. */
+	uint8_t final_flip_id = stream_getc(peer->curr); /* Skip final flip ID. */
+	char local_id_str[INET_ADDRSTRLEN], remote_id_str[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, local_id_str, sizeof(local_id_str));
+	inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_id_str, sizeof(remote_id_str));
+
+	char src_rt_id_str[INET_ADDRSTRLEN], dst_router_id_str[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &src_rt_id, src_rt_id_str, sizeof(src_rt_id_str));
+	inet_ntop(AF_INET, &dst_router_id, dst_router_id_str,
+		  sizeof(dst_router_id_str));
+	
+	char debug_buf[512];
+	snprintf(debug_buf, sizeof(debug_buf),
+		 "[%s] BGP NOTIFY received from %s: code %d, subcode %d, "
+		 "src router ID %s, dst router ID %s, final flip ID %d\n",
+		local_id_str,remote_id_str, outer.code, outer.subcode, src_rt_id_str,
+		 dst_router_id_str, final_flip_id);
+	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	if (fp1 != -1) {
+		ssize_t bytes_written = write(fp1, debug_buf, strlen(debug_buf));
+		(void)bytes_written;
+		close(fp1);
+	}
+
+	struct listnode *node, *nnode;
+	struct peer *tmp_peer;
+
+	for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
+			/* Check peer connection status */
+			if (tmp_peer == peer)
+				continue; /* Skip self */
+			if (tmp_peer->connection->status == Established) {
+				uint8_t data[9];
+				write_uint32_be(data, src_rt_id);
+				write_uint32_be(data + 4, dst_router_id);
+				data[8] = final_flip_id;  // final_flip_id
+				// send_custom_bgp_data(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof(data));
+				bgp_notify_send_with_data(tmp_peer->connection, BGP_NOTIFY_CEASE, BGP_NOTIFY_SUBCODE_UNSPECIFIC, data, sizeof(data));
+				
+				char remote_connected_id_str[INET_ADDRSTRLEN];
+				inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr, remote_connected_id_str, sizeof(remote_connected_id_str));
+				// char local_id_str[INET_ADDRSTRLEN];
+
+				snprintf(debug_buf, sizeof(debug_buf),
+					 "[%s] BGP NOTIFY sent to %s:  "
+					 "src router ID %s, dst router ID %s, final flip ID %d\n",
+					 local_id_str, remote_connected_id_str, src_rt_id_str,
+					 dst_router_id_str, final_flip_id);
+				
+				int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+				if (fp1 != -1) {
+					ssize_t bytes_written = write(fp1, debug_buf, strlen(debug_buf));
+					(void)bytes_written;
+					close(fp1);
+				}
+
+			}
+		}
+	return BGP_PACKET_NOOP;
+
 	outer.length = size - 2;
 	outer.data = NULL;
 	outer.raw_data = NULL;
@@ -3872,10 +4007,29 @@ void bgp_process_packet(struct event *thread)
 	int mprc;		  // message processing return code
 
 	connection = EVENT_ARG(thread);
+
 	peer = connection->peer;
 	rpkt_quanta_old = atomic_load_explicit(&peer->bgp->rpkt_quanta,
 					       memory_order_relaxed);
 	fsm_update_result = 0;
+	int fg  = 0;
+	if (connection->flag) {
+		char debug_buf[256];
+		char local_ip_str[INET_ADDRSTRLEN], from_ip_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
+			  local_ip_str, sizeof(local_ip_str));
+		inet_ntop(AF_INET, &peer->remote_id.s_addr, from_ip_str,
+			  sizeof(from_ip_str));
+		snprintf(debug_buf, sizeof(debug_buf),
+			 "BGP_LINK_STATE_PROCESS_FIRST: [%s] rcv packet from [%s]\n",
+			 local_ip_str, from_ip_str);
+		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | 
+											 O_APPEND | O_CREAT, 0666);			
+		write(fp1, debug_buf, strlen(debug_buf));
+		close(fp1);
+		connection->flag = 0;
+		fg = 1;
+	}
 
 	/* Guard against scheduled events that occur after peer deletion. */
 	if (connection->status == Deleted || connection->status == Clearing)
@@ -3907,6 +4061,46 @@ void bgp_process_packet(struct event *thread)
 
 		/* adjust size to exclude the marker + length + type */
 		size -= BGP_HEADER_SIZE;
+
+		if (fg) {
+			char debug_buf[256], local_ip_str[INET_ADDRSTRLEN], from_ip_str[INET_ADDRSTRLEN];
+			inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
+				  local_ip_str, sizeof(local_ip_str));
+			inet_ntop(AF_INET, &peer->remote_id.s_addr, from_ip_str,
+				  sizeof(from_ip_str));
+			snprintf(debug_buf, sizeof(debug_buf),
+				 "BGP_LINK_STATE_PROCESS_SECOND: [%s] rcv packet from [%s] BEFORE PRINT NEW TYPE, size: %u\n",
+				 local_ip_str, from_ip_str, size);
+			int fp1 = open("/home/frr/test/test.txt", O_WRONLY | 
+												 O_APPEND | O_CREAT, 0666);			
+			write(fp1, debug_buf, strlen(debug_buf));
+			close(fp1);
+		}
+
+		char debug_buf[256], local_ip_str[INET_ADDRSTRLEN], from_ip_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, local_ip_str,
+			  sizeof(local_ip_str));
+		inet_ntop(AF_INET, &peer->remote_id.s_addr, from_ip_str,
+			  sizeof(from_ip_str));
+
+		char type_str[256] = "Unknown";
+		for (int i = BGP_MSG_OPEN; i <= BGP_MSG_LINK_STATE; i++) {
+			if (type == i) {
+				// type_str = bgp_type_str[i];
+				memcpy(type_str, bgp_type_str[i],
+				       sizeof(type_str));	
+				break;
+			}
+		}
+
+		snprintf(debug_buf, sizeof(debug_buf),
+			 "[%s] rcv packet from [%s], type: %s, size: %u\n",
+			 local_ip_str,from_ip_str, type_str,
+			 size);
+		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		write(fp1, debug_buf, strlen(debug_buf));
+		close(fp1);
+
 
 		/* Read rest of the packet and call each sort of packet routine
 		 */
@@ -3981,6 +4175,20 @@ void bgp_process_packet(struct event *thread)
 					__func__, peer->host);
 			break;
 		case BGP_MSG_LINK_STATE:
+			if (fg) {
+				char debug_buf[256], local_ip_str[INET_ADDRSTRLEN], from_ip_str[INET_ADDRSTRLEN];
+				inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
+					  local_ip_str, sizeof(local_ip_str));
+				inet_ntop(AF_INET, &peer->remote_id.s_addr,
+					  from_ip_str, sizeof(from_ip_str));
+				snprintf(debug_buf, sizeof(debug_buf),
+					 "BGP_LINK_STATE_PROCESS_THIRD: [%s] rcv packet from [%s] ENTER PROCESS FUNC, size: %u\n",
+					 local_ip_str, from_ip_str, size);
+				int fp1 = open("/home/frr/test/test.txt", O_WRONLY | 
+													 O_APPEND | O_CREAT, 0666);			
+				write(fp1, debug_buf, strlen(debug_buf));
+				close(fp1);
+			}
 			frrtrace(2, frr_bgp, linkstate_process, peer, size);
 			atomic_fetch_add_explicit(&peer->linkstate_in, 1,
 						  memory_order_relaxed);
@@ -4096,16 +4304,29 @@ bool  send_custom_bgp_data(struct peer_connection *connection,
 {
     struct peer *peer = connection->peer;
     struct stream *s;
-    
+
+	char debug_buf[256], src_router_id_str[INET_ADDRSTRLEN], dst_router_id_str[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, src_router_id_str,
+			  sizeof(src_router_id_str));
+	inet_ntop(AF_INET, &peer->remote_id.s_addr, dst_router_id_str,
+			  sizeof(dst_router_id_str));
+	snprintf(debug_buf, sizeof(debug_buf),
+		 "[%s] send_custom_bgp_data to %s, msg_type: %u, data_len: %zu\n",
+		 src_router_id_str, dst_router_id_str,
+		  msg_type, data_len);
+	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	write(fp1, debug_buf, strlen(debug_buf));
+	close(fp1);
+
+	
+    frr_mutex_lock_autounlock(&connection->io_mtx);
     // 1. 创建数据包
     s = stream_new(BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE);
-    if (!s) {
-        flog_err(EC_BGP_PKT_PROCESS, "Failed to allocate stream");
-        return false;
-    }
     
     // 2. 设置BGP头部（marker + 长度占位符 + 类型）
     bgp_packet_set_marker(s, msg_type);
+
+	// stream_putw(s, 0); // 占位符，稍后设置正确的长度
     
     // 3. 添加自定义数据
     if (data && data_len > 0) {
@@ -4116,6 +4337,15 @@ bool  send_custom_bgp_data(struct peer_connection *connection,
     bgp_packet_set_size(s);
     
     // 5. 添加到输出队列并触发发送
-    bgp_packet_add(connection, peer, s);
-    bgp_writes_on(connection);
+    // bgp_packet_add(connection, peer, s);
+    // bgp_writes_on(connection);
+	
+	stream_fifo_clean(connection->obuf);
+
+	stream_fifo_push(connection->obuf, s);
+	
+	bgp_write_customize(connection, peer, msg_type);
+
+
+	return 0;
 }
