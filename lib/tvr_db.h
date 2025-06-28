@@ -54,9 +54,9 @@ macro_inline int node_nlri_cmp(const struct tvr_node_nlri *lhs,
     if(lhs->local_node != rhs->local_node) {
     	return numcmp(lhs->local_node, rhs->local_node);
     }
-    if (lhs->attr.seq_num != rhs->attr.seq_num) {
-        return numcmp(lhs->attr.seq_num, rhs->attr.seq_num);
-    }
+    // if (lhs->attr.seq_num != rhs->attr.seq_num) {
+    //     return numcmp(lhs->attr.seq_num, rhs->attr.seq_num);
+    // }
     return numcmp(lhs->time_stamp, rhs->time_stamp);
 }
 
@@ -138,6 +138,7 @@ macro_inline int prefix_nlri_cmp(const struct tvr_prefix_nlri *lhs,
 DECLARE_RBTREE_UNIQ(pnlri_rb, struct tvr_prefix_nlri, entry, prefix_nlri_cmp);
 
 struct tvr_db {
+    pthread_rwlock_t rwlock;
 	struct nnlri_rb_head nnlri_rb_root;	
 	struct lnlri_rb_head lnlri_rb_root;
 	struct pnlri_rb_head pnlri_rb_root;
@@ -179,6 +180,10 @@ extern size_t tvr_db_aging(struct tvr_db *db, uint64_t time_stamp);
 extern bool tvr_db_process(struct tvr_db *db, struct tvr_nlri *nlri, bool delete);
 
 extern void tvr_db_show(struct tvr_db *db, struct vty *vty);
+
+extern bool tvr_db_find_nlri(struct tvr_db *db, struct tvr_nlri *nlri);
+
+
 
 #ifdef __cplusplus
 }

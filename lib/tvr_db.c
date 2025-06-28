@@ -169,7 +169,7 @@ struct tvr_db *tvr_db_create(void) {
 	struct tvr_db *db;
 
 	db = XCALLOC(MTYPE_TVR_DB, sizeof(struct tvr_db));
-
+	db->rwlock = (pthread_rwlock_t)PTHREAD_RWLOCK_INITIALIZER;
 	nnlri_rb_init(&db->nnlri_rb_root);
 	lnlri_rb_init(&db->lnlri_rb_root);
 	pnlri_rb_init(&db->pnlri_rb_root);
@@ -214,9 +214,32 @@ size_t tvr_db_aging(struct tvr_db *db, uint64_t time_stamp) {
 	return aged_nlri_cnt;
 } 
 
+bool tvr_db_find_nlri(struct tvr_db *db, struct tvr_nlri *nlri)
+{
+	bool found = false;
+	switch (nlri->type) {
+	case NODE:
+		found = nnlri_rb_find(&db->nnlri_rb_root, &nlri->u.node_nlri);
+		break;
+	case LINK:
+		found = lnlri_rb_find(&db->lnlri_rb_root, &nlri->u.link_nlri);
+		break;
+	case PREFIX:
+		found = pnlri_rb_find(&db->pnlri_rb_root, &nlri->u.prefix_nlri);
+		break;
+	default:
+		zlog_warn("Unsupported NLRI Type!");
+		break;
+	}
+	return found;
+}
+
+
 bool tvr_db_process(struct tvr_db *db, struct tvr_nlri *nlri, bool delete)
 {
 	bool success;
+	pthread_rwlock_wrlock(&db -> rwlock);
+
 	switch (nlri->type) {
 	case NODE:
 		success = process_node_nlri(db, &nlri->u.node_nlri, delete);
@@ -232,6 +255,8 @@ bool tvr_db_process(struct tvr_db *db, struct tvr_nlri *nlri, bool delete)
 		zlog_warn("Unsupported NLRI Type!");
 		break;
 	}
+	pthread_rwlock_unlock(&db -> rwlock);
+
 	return success;
 }
 

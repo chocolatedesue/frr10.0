@@ -25,6 +25,7 @@ typedef struct {
     uint64_t last_timestamp;
     uint64_t sequence;
     pthread_mutex_t mutex;
+    uint64_t tmp_idx;
 } simple_id_generator_t;
 
 // 函数声明

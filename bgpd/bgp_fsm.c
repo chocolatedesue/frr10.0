@@ -2338,26 +2338,12 @@ bgp_establish(struct peer_connection *connection)
 	nlri.u.node_nlri.time_stamp = 0;
 	nlri.u.node_nlri.attr.spf_status = 0;
 	nlri.u.node_nlri.attr.seq_num = pkt_id;
-	int result = tvr_db_process(peer -> bgp -> db, &nlri, false);  // false = 添加/更新
+	// struct tvr_node_nlri *rb_entry; 
+	// rb_entry = nnlri_rb_find(peer->bgp->db, &nlri.u.node_nlri); 
+	int result = tvr_db_process(peer -> bgp -> db, &nlri, false); 
 
-	// char bgp_router_id_str[INET_ADDRSTRLEN];
-	// inet_ntop(AF_INET, &bgp->router_id.s_addr, bgp_router_id_str,
-	// 	  sizeof(bgp_router_id_str));
-	// int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 
-	if (result) {
-		char debug_buf[512];
-		sprintf(debug_buf,
-			"[%s] BGP add self to tvr_db, pkt_id: %llu, db_address: %p, static_db_address: %p, PID: %d\n",
-			bgp_router_id_str, pkt_id, (void*) peer -> bgp->db, tvr_db_get_instance(), getpid());
-		if (fp1 != -1) {
-			write(fp1, debug_buf,
-							strlen(debug_buf));
-		
-		}
-	}
 
-		
 		
 		struct listnode *node, *nnode;
 		struct peer *tmp_peer;

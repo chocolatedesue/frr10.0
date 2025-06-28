@@ -1,4 +1,6 @@
 #include "simple_id.h"
+#include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -68,6 +70,7 @@ int is_id_sequence_full(simple_id_generator_t* gen) {
     return is_full;
 }
 
+
 // 生成简单的全局唯一ID（仅时间戳+序列号）
 uint64_t generate_simple_id(simple_id_generator_t* gen) {
     if (!gen) {
@@ -76,6 +79,12 @@ uint64_t generate_simple_id(simple_id_generator_t* gen) {
     }
     
     pthread_mutex_lock(&gen->mutex);
+
+    gen -> tmp_idx++;
+    
+    pthread_mutex_unlock(&gen->mutex);
+    
+    return gen -> tmp_idx;
     
     uint64_t timestamp = get_current_timestamp_ms();
     if (timestamp == 0) {

@@ -3839,9 +3839,15 @@ int bgp_link_state_receive(struct peer_connection *connection,
 	// nlri.type = LINK;  // 或 LINK, PREFIX
 	// nlri.u.link_nlri.local_node = src_router_id;
 	// nlri.u.link_nlri.remote_node = dst_router_id;
-	// nlri.u.link_nlri.time_stamp = current_time();
-	// nlri.u.link_nlri.attr.seq_num = 1;
-	// bool success = tvr_db_process(db, &nlri, false);
+	// nlri.u.link_nlri.time_stamp = 0;
+	// nlri.u.link_nlri.attr.seq_num = generate_simple_id(peer -> bgp->id_gen);
+	
+	// if (!tvr_db_find_nlri(peer->bgp->db, &nlri)) {
+	// 	tvr_db_process(peer -> bgp -> db, &nlri, false);
+		
+	// } 
+
+ 
 
 	inet_ntop (
 	AF_INET, &src_router_id, src_router_id_str, INET_ADDRSTRLEN);
