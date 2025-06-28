@@ -12,6 +12,8 @@
 #include "hook.h"
 #include "frr_pthread.h"
 #include "lib/json.h"
+#include "simple_id.h"
+#include "tvr_db.h"
 #include "vrf.h"
 #include "vty.h"
 #include "srv6.h"
@@ -348,6 +350,8 @@ PREDECL_RBTREE_UNIQ(bgp_mplsvpn_nh_label_bind_cache);
 
 /* BGP instance structure.  */
 struct bgp {
+	struct tvr_db* db;
+	simple_id_generator_t* id_gen; /* ID generator for this BGP instance */
 	/* AS number of this BGP instance.  */
 	as_t as;
 	char *as_pretty;

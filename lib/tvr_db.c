@@ -9,7 +9,11 @@
 #include "tvr_db.h"
 #include "memory.h"
 
-DEFINE_MTYPE_STATIC(LIB, TVR_DB, "Time Variant Routing Database");
+// #if USE_SHARED_TVR_DB
+// #include "tvr_db_shared.h"
+// #endif
+
+
 
 #define DEFINE_TVR_CREATE(prefix, type)			\
 static type * prefix##_create(void) {			\
@@ -108,7 +112,60 @@ DEFINE_TVR_AGING(node_nlri, nnlri_rb)
 DEFINE_TVR_AGING(link_nlri, lnlri_rb)
 DEFINE_TVR_AGING(prefix_nlri, pnlri_rb)
 
-struct tvr_db *tvr_db_create() {
+/* Global singleton instance */
+static struct tvr_db *g_tvr_db_instance = NULL;
+
+/**
+ * Get the singleton instance of TVR database (now uses shared memory)
+ * Creates the instance if it doesn't exist
+ * 
+ * @return Pointer to the singleton TVR database instance
+ */
+struct tvr_db *tvr_db_get_instance(void) {
+#if USE_SHARED_TVR_DB
+	/* Use shared memory implementation for true cross-process singleton */
+	return tvr_db_get_shared_instance();
+#else
+	/* Use traditional per-process singleton */
+	if (g_tvr_db_instance == NULL) {
+		g_tvr_db_instance = tvr_db_create();
+	}
+	return g_tvr_db_instance;
+#endif
+}
+
+/**
+ * Check if singleton instance exists
+ * 
+ * @return true if instance exists, false otherwise
+ */
+bool tvr_db_instance_exists(void) {
+	return (g_tvr_db_instance != NULL);
+}
+
+/**
+ * Destroy the singleton instance
+ * Sets the global pointer to NULL after destruction
+ */
+void tvr_db_destroy_instance(void) {
+	if (g_tvr_db_instance != NULL) {
+		tvr_db_destroy(&g_tvr_db_instance);
+		g_tvr_db_instance = NULL;
+	}
+}
+
+/**
+ * Reset the singleton instance
+ * Destroys existing instance and creates a new one
+ * 
+ * @return Pointer to the new singleton instance
+ */
+struct tvr_db *tvr_db_reset_instance(void) {
+	tvr_db_destroy_instance();
+	return tvr_db_get_instance();
+}
+
+struct tvr_db *tvr_db_create(void) {
 	struct tvr_db *db;
 
 	db = XCALLOC(MTYPE_TVR_DB, sizeof(struct tvr_db));
@@ -259,7 +316,7 @@ static void tvr_show_prefix_nlri(struct tvr_db *db, struct vty *vty) {
 			"Time Stamp",
 			"SPF Status",
 			"SEQ Number");
-			is_first = false;
+		 is_first = false;
 		}
 
 		pref.prefixlen = nlri->prefixlen;

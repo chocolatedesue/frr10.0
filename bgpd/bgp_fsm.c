@@ -1298,11 +1298,10 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 						sizeof(bgp_final_remote_id_str));
 				inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_is_str,
 						sizeof(remote_is_str));
-
+				uint64_t pkt_id = generate_simple_id(peer->bgp->id_gen);
 				sprintf(debug_buf, "BGP [%s] IDEL; walk connected peer [%s]: "
-        "remote_id_str: %s, bgp_as: %u, bgp_address: %p, tmp_peer_address: %p, peer_address: %p\n",
-			bgp_router_id_str, bgp_final_remote_id_str, remote_is_str,
-			(unsigned int)peer->bgp->as, (void *)peer->bgp, (void *)tmp_peer, (void *)peer);
+        "remote_id_str: %s, pkt_id %llu\n",
+			bgp_router_id_str, bgp_final_remote_id_str, remote_is_str, pkt_id);
 
 				int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 				if (fp1 != -1) {
@@ -1314,6 +1313,7 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 				write_uint32_be(data, peer->bgp->router_id.s_addr);
 				write_uint32_be(data + 4, peer->remote_id.s_addr);
 				data[8] = 0x00;  // final_flip_id
+				
 				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof(data));
 			// bgp_notify_send_with_data(tmp_peer->connection, BGP_NOTIFY_CEASE, BGP_NOTIFY_SUBCODE_UNSPECIFIC, data, sizeof(data));
 			}
@@ -2321,8 +2321,87 @@ bgp_establish(struct peer_connection *connection)
 		EVENT_OFF(peer->connection->t_routeadv);
 		BGP_TIMER_ON(peer->connection->t_routeadv, bgp_routeadv_timer,
 			     0);
+
+
+		char bgp_router_id_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
+			  bgp_router_id_str, sizeof(bgp_router_id_str));
+		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+
+
+			struct tvr_nlri nlri;
+	// nlri.type = NODE;
+	uint64_t pkt_id = generate_simple_id(peer -> bgp->id_gen	);
+	
+	nlri.type = NODE;
+	nlri.u.node_nlri.local_node = peer -> bgp->router_id.s_addr;
+	nlri.u.node_nlri.time_stamp = 0;
+	nlri.u.node_nlri.attr.spf_status = 0;
+	nlri.u.node_nlri.attr.seq_num = pkt_id;
+	int result = tvr_db_process(peer -> bgp -> db, &nlri, false);  // false = 添加/更新
+
+	// char bgp_router_id_str[INET_ADDRSTRLEN];
+	// inet_ntop(AF_INET, &bgp->router_id.s_addr, bgp_router_id_str,
+	// 	  sizeof(bgp_router_id_str));
+	// int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+
+	if (result) {
+		char debug_buf[512];
+		sprintf(debug_buf,
+			"[%s] BGP add self to tvr_db, pkt_id: %llu, db_address: %p, static_db_address: %p, PID: %d\n",
+			bgp_router_id_str, pkt_id, (void*) peer -> bgp->db, tvr_db_get_instance(), getpid());
+		if (fp1 != -1) {
+			write(fp1, debug_buf,
+							strlen(debug_buf));
+		
+		}
 	}
 
+		
+		
+		struct listnode *node, *nnode;
+		struct peer *tmp_peer;
+
+
+		/* Iterate through all peers in the BGP instance */
+		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
+			/* Check peer connection status */
+
+			if (tmp_peer->connection->status == Established) {
+				/* Use debug_buf to write to file */
+				char debug_buf[512];  /* Increased buffer size */
+				char tmp_peer_remote_id_str[INET_ADDRSTRLEN];
+
+				inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, bgp_router_id_str,
+						sizeof(bgp_router_id_str));
+				inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr, tmp_peer_remote_id_str,
+						sizeof(tmp_peer_remote_id_str));
+
+				/* Fixed format specifiers and variable names */
+				snprintf(debug_buf, sizeof(debug_buf), 
+						"BGP [%s] established; connedted peer: [%s]"
+						"local_as: %u, remote_as %u\n",
+						bgp_router_id_str, tmp_peer_remote_id_str,
+						(unsigned int)peer->bgp->as, (unsigned int)tmp_peer->as);
+
+				
+				if (fp1 != -1) {
+					write(fp1, debug_buf, strlen(debug_buf));
+					
+				}
+
+				uint8_t data[9];
+				write_uint32_be(data, peer->bgp->router_id.s_addr);
+				write_uint32_be(data + 4, tmp_peer->remote_id.s_addr);
+				data[8] = 0x01;  // final_flip_id
+
+				// bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof(data));
+				
+			}
+		}
+			close(fp1);
+		
+	}
 	if (peer->doppelganger &&
 	    (peer->doppelganger->connection->status != Deleted)) {
 		if (bgp_debug_neighbor_events(peer))

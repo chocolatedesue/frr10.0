@@ -138,6 +138,7 @@ lib_libfrr_la_SOURCES = \
 	lib/tc.c \
 	lib/tvr_db.c \
 	lib/tvr_spf.c \
+	lib/simple_id.c \
 	# end
 
 nodist_lib_libfrr_la_SOURCES = \
@@ -328,12 +329,13 @@ pkginclude_HEADERS += \
 	lib/zlog_live.h \
 	lib/zlog_targets.h \
 	lib/pbr.h \
-	lib/tc.h \
+	lib/tc.h \	
 	lib/routing_nb.h \
 	\
 	lib/assert/assert.h \
 	lib/tvr_db.h \
 	lib/tvr_spf.h \
+	lib/simple_id.h \
 	# end
 
 

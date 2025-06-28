@@ -6,6 +6,7 @@
  */
 
 #include <fcntl.h>
+#include <stdio.h>
 #include <zebra.h>
 #include <sys/time.h>
 
@@ -51,6 +52,7 @@
 #include "bgpd/bgp_keepalives.h"
 #include "bgpd/bgp_flowspec.h"
 #include "bgpd/bgp_trace.h"
+#include "tvr_db.h"
 
 DEFINE_HOOK(bgp_packet_dump,
 		(struct peer *peer, uint8_t type, bgp_size_t size,
@@ -3832,6 +3834,15 @@ int bgp_link_state_receive(struct peer_connection *connection,
 	dst_router_id = stream_getl(s);
 	final_flip_id = stream_getc(s);
 
+
+	// struct tvr_nlri nlri;
+	// nlri.type = LINK;  // 或 LINK, PREFIX
+	// nlri.u.link_nlri.local_node = src_router_id;
+	// nlri.u.link_nlri.remote_node = dst_router_id;
+	// nlri.u.link_nlri.time_stamp = current_time();
+	// nlri.u.link_nlri.attr.seq_num = 1;
+	// bool success = tvr_db_process(db, &nlri, false);
+
 	inet_ntop (
 	AF_INET, &src_router_id, src_router_id_str, INET_ADDRSTRLEN);
 	inet_ntop (
@@ -3842,13 +3853,43 @@ int bgp_link_state_receive(struct peer_connection *connection,
 	inet_ntop (
 	AF_INET, &peer->remote_id.s_addr, remote_router_id_str,
 		INET_ADDRSTRLEN);
-
-	snprintf(debug_buf, sizeof(debug_buf),
-		 "[%s] rcv LINKSTATE from [%s], src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
-		 local_router_id_str, remote_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id);
 	
 	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
-	write (fp1, debug_buf, strlen(debug_buf));
+	if (src_router_id == peer -> bgp -> router_id.s_addr) {
+		snprintf(debug_buf, sizeof(debug_buf),
+		 "[%s] rcv Self LINKSTATE from [%s], src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
+		 local_router_id_str, remote_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id);
+		 write (fp1, debug_buf, strlen(debug_buf));
+	} else {
+		snprintf(debug_buf, sizeof(debug_buf),
+		 "[%s] rcv Diff LINKSTATE from [%s], src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
+		local_router_id_str, remote_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id);
+
+		write (fp1, debug_buf, strlen(debug_buf));
+
+		struct listnode *node, *nnode;
+		struct peer *tmp_peer;
+
+		// for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
+		// 	if (tmp_peer -> connection -> status != Established)
+		// 		continue;
+		// 	if (tmp_peer == peer)
+		// 		continue;
+		// 	char tmp_buf[512];
+		// 	char tmp_peer_router_id_str[INET_ADDRSTRLEN];
+		// 	inet_ntop (
+		// 	AF_INET, &tmp_peer->bgp->router_id.s_addr,
+		// 	tmp_peer_router_id_str, INET_ADDRSTRLEN);
+		// 	snprintf(tmp_buf, sizeof(tmp_buf),
+		// 	 "[%s] rcv state and send to connected peer %s, src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
+		// 	 local_router_id_str, tmp_peer_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id);
+		// 	write (fp1, tmp_buf, strlen(tmp_buf));
+		// }
+	}
+
+
+	
+	// write (fp1, debug_buf, strlen(debug_buf));
 	close(fp1);
 	return BGP_PACKET_NOOP;
 
@@ -4179,7 +4220,7 @@ void bgp_link_state_send(struct peer_connection *connection,
 			  sizeof(dst_router_id_str));
 
 
-	char type_str[256] = "Unknown";
+	char type_str[50] = "Unknown";
 	
 	// TODO: Notice the boundary of bgp_type_str
 	for (int i = BGP_MSG_OPEN; i <= BGP_MSG_LINK_STATE; i++) {

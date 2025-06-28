@@ -14,9 +14,25 @@
 #include "prefix.h"
 #include "vty.h"
 
+/* Enable shared memory TVR database implementation */
+// #ifndef USE_SHARED_TVR_DB
+// #define USE_SHARED_TVR_DB 1
+// #endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// #if USE_SHARED_TVR_DB
+// /* Forward declarations for shared memory implementation */
+// extern struct tvr_db *tvr_db_get_shared_instance(void);
+// extern bool tvr_db_shared_instance_exists(void);
+// extern void tvr_db_release_shared_instance(void);
+// extern bool tvr_db_register_process(const char *process_name);
+// extern bool tvr_db_unregister_process(void);
+// #endif
+
+DEFINE_MTYPE_STATIC(LIB, TVR_DB, "Time Variant Routing Database");
 
 PREDECL_RBTREE_UNIQ(nnlri_rb);
 
@@ -37,6 +53,9 @@ macro_inline int node_nlri_cmp(const struct tvr_node_nlri *lhs,
 {
     if(lhs->local_node != rhs->local_node) {
     	return numcmp(lhs->local_node, rhs->local_node);
+    }
+    if (lhs->attr.seq_num != rhs->attr.seq_num) {
+        return numcmp(lhs->attr.seq_num, rhs->attr.seq_num);
     }
     return numcmp(lhs->time_stamp, rhs->time_stamp);
 }
@@ -69,10 +88,16 @@ macro_inline int link_nlri_cmp(const struct tvr_link_nlri *lhs,
     if(lhs->remote_node != rhs->remote_node) {
         return numcmp(lhs->remote_node, rhs->remote_node);
     }
+
     int i = memcmp(&lhs->link_addr, &rhs->link_addr, 16);
     if(i) {
         return i;
     }
+
+    if (lhs -> attr.seq_num != rhs -> attr.seq_num) {
+        return numcmp(lhs->attr.seq_num, rhs->attr.seq_num);
+    }
+
     return numcmp(lhs->time_stamp, rhs->time_stamp);
 }
 
@@ -137,6 +162,15 @@ struct tvr_nlri {
 
 
 extern struct tvr_db *tvr_db_create(void);
+
+/* Singleton pattern functions */
+extern struct tvr_db *tvr_db_get_instance(void);
+
+extern bool tvr_db_instance_exists(void);
+
+extern void tvr_db_destroy_instance(void);
+
+extern struct tvr_db *tvr_db_reset_instance(void);
 
 extern void tvr_db_destroy(struct tvr_db **db);
 

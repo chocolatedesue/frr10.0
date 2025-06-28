@@ -3,6 +3,7 @@
  * Copyright (C) 1996, 97, 98, 99, 2000 Kunihiro Ishiguro
  */
 
+#include <fcntl.h>
 #include <zebra.h>
 
 #include "prefix.h"
@@ -28,6 +29,7 @@
 #include "jhash.h"
 #include "table.h"
 #include "lib/json.h"
+#include "simple_id.h"
 #include "lib/sockopt.h"
 #include "frr_pthread.h"
 #include "bitfield.h"
@@ -81,6 +83,7 @@
 #include "bgp_trace.h"
 
 DEFINE_MTYPE_STATIC(BGPD, PEER_TX_SHUTDOWN_MSG, "Peer shutdown message (TX)");
+DEFINE_MTYPE_STATIC(BGPD, BGP_IDGEN, "BGP ID generator");
 DEFINE_QOBJ_TYPE(bgp_master);
 DEFINE_QOBJ_TYPE(bgp);
 DEFINE_QOBJ_TYPE(peer);
@@ -1529,6 +1532,8 @@ struct peer *peer_new(struct bgp *bgp)
 	peer->remote_role = ROLE_UNDEFINED;
 	peer->password = NULL;
 	peer->max_packet_size = BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE;
+	peer->link_state_in = 0;
+	peer->link_state_out = 0;
 
 	/* Set default flags. */
 	FOREACH_AFI_SAFI (afi, safi) {
@@ -3354,15 +3359,29 @@ static void bgp_vrf_string_name_delete(void *data)
 
 /* BGP instance creation by `router bgp' commands. */
 static struct bgp *bgp_create(as_t *as, const char *name,
-			      enum bgp_instance_type inst_type,
-			      const char *as_pretty,
-			      enum asnotation_mode asnotation)
+				  enum bgp_instance_type inst_type,
+				  const char *as_pretty,
+				  enum asnotation_mode asnotation)
 {
 	struct bgp *bgp;
 	afi_t afi;
 	safi_t safi;
 
 	bgp = XCALLOC(MTYPE_BGP, sizeof(struct bgp));
+	
+	/* 初始化ID生成器 */
+	bgp->id_gen = XCALLOC(MTYPE_BGP_IDGEN, sizeof(simple_id_generator_t));
+	if (init_simple_id_generator(bgp->id_gen) != 0) {
+		flog_err(EC_BGP_INVALID_BGP_INSTANCE,
+			 "Failed to initialize ID generator for BGP instance");
+		XFREE(MTYPE_BGP_IDGEN, bgp->id_gen);
+		XFREE(MTYPE_BGP_IDGEN, bgp);
+		return NULL;
+	}
+
+	bgp->db = tvr_db_get_instance();
+
+
 	bgp->as = *as;
 	if (as_pretty)
 		bgp->as_pretty = XSTRDUP(MTYPE_BGP_NAME, as_pretty);
@@ -3547,6 +3566,7 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 
 	memset(&bgp->ebgprequirespolicywarning, 0,
 	       sizeof(bgp->ebgprequirespolicywarning));
+
 
 	return bgp;
 }
@@ -3751,12 +3771,14 @@ int bgp_get(struct bgp **bgp_val, as_t *as, const char *name,
 	bgp_handle_socket(bgp, vrf, VRF_UNKNOWN, true);
 	listnode_add(bm->bgp, bgp);
 
+
 	if (IS_BGP_INST_KNOWN_TO_ZEBRA(bgp)) {
 		if (BGP_DEBUG(zebra, ZEBRA))
 			zlog_debug("%s: Registering BGP instance %s to zebra",
 				   __func__, bgp->name_pretty);
 		bgp_zebra_instance_register(bgp);
 	}
+
 
 	return BGP_CREATED;
 }
@@ -4132,9 +4154,14 @@ void bgp_free(struct bgp *bgp)
 	XFREE(MTYPE_BGP_NAME, bgp->name_pretty);
 	XFREE(MTYPE_BGP_NAME, bgp->snmp_stats);
 	XFREE(MTYPE_BGP_CONFED_LIST, bgp->confed_peers);
+	/* 清理ID生成器 */
+	if (bgp->id_gen) {
+		destroy_simple_id_generator(bgp->id_gen);
+		XFREE(MTYPE_BGP_IDGEN, bgp->id_gen);
+	}
 
 	XFREE(MTYPE_BGP, bgp);
-}
+} 
 
 struct peer *peer_lookup_by_conf_if(struct bgp *bgp, const char *conf_if)
 {
