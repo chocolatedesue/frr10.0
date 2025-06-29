@@ -3939,10 +3939,10 @@ int bgp_link_state_receive(struct peer_connection *connection,
 				continue;
 			char tmp_buf[512];
 			char tmp_peer_router_id_str[INET_ADDRSTRLEN];
-			inet_ntop(AF_INET, &tmp_peer->bgp->router_id.s_addr,
+			inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr,
 			tmp_peer_router_id_str, INET_ADDRSTRLEN);
 			snprintf(tmp_buf, sizeof(tmp_buf),
-			 "[%s] rcv state and send to connected peer %s, count: %llu, first_local: %s, first_remote: %s, first_spf_status: %u\n",
+			 "[%s] rcv state and send to connected peer [%s], count: %llu, first_local: %s, first_remote: %s, first_spf_status: %u\n",
 			 local_router_id_str, tmp_peer_router_id_str, (unsigned long long)link_nlri_count,
 			 first_local_node_str, first_remote_node_str, first_spf_status);
 			write(fp1, tmp_buf, strlen(tmp_buf));

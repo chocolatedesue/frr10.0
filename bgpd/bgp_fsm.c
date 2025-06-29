@@ -1285,6 +1285,38 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 		struct listnode *node, *nnode;
 		struct peer *tmp_peer;
 		hook_call(peer_backward_transition, peer);
+		uint64_t seq_id = generate_simple_id(peer->bgp->id_gen);
+		
+		// Phase 1: Insert link state into database first
+		struct tvr_nlri local_node_nlri, remote_node_nlri;
+		local_node_nlri.type = NODE, remote_node_nlri.type = NODE;
+		uint32_t src_router_id = peer->bgp->router_id.s_addr;
+		uint32_t dst_router_id = peer->remote_id.s_addr;
+
+		// tvr_db_assign_node_nlri(
+		// 	&local_node_nlri.u.node_nlri, src_router_id, 0, 0, seq_id);
+		// tvr_db_assign_node_nlri(
+		// 	&remote_node_nlri.u.node_nlri, dst_router_id, 0, 0, seq_id);
+		// tvr_db_process(peer->bgp->db, &local_node_nlri, false);
+		// tvr_db_process(peer->bgp->db, &remote_node_nlri, false);
+
+		struct tvr_nlri local_link_nlri;
+		local_link_nlri.type = LINK;
+		tvr_db_assign_link_nlri(
+			&local_link_nlri.u.link_nlri, src_router_id, dst_router_id, in6addr_any,
+			0, 0, 0, seq_id);
+		tvr_db_process(peer->bgp->db, &local_link_nlri, false);
+
+		// Phase 2: Prepare batch format for single NLRI (consistent with bgp_establish)
+		uint8_t data[25];
+		const uint64_t num = 1;
+		write_uint64_be(data, num); 
+		write_uint32_be(data + 8, src_router_id);
+		write_uint32_be(data + 12, dst_router_id);
+		write_uint64_be(data + 16, seq_id);
+		data[24] = 0x00;  // spf_status = 0 (disconnected)
+
+		// Phase 3: Traverse peers and send notifications
 		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
 			/* Check peer connection status */
 			if (tmp_peer->connection->status == Established) {
@@ -1301,10 +1333,10 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 						sizeof(bgp_final_remote_id_str));
 				inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_is_str,
 						sizeof(remote_is_str));
-				uint64_t pkt_id = generate_simple_id(peer->bgp->id_gen);
+				
 				sprintf(debug_buf, "BGP [%s] IDEL; walk connected peer [%s]: "
-        "remote_id_str: %s, pkt_id %llu\n",
-			bgp_router_id_str, bgp_final_remote_id_str, remote_is_str, pkt_id);
+        "remote_id_str: %s, seq_id %llu\n",
+			bgp_router_id_str, bgp_final_remote_id_str, remote_is_str, seq_id);
 
 				int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 				if (fp1 != -1) {
@@ -1312,13 +1344,7 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 					(void)bytes_written;
 					close(fp1);
 				}
-				uint8_t data[25];
-				const uint64_t num = 1;
-				write_uint64_be (data,num); 
-				write_uint32_be(data + 8, peer->bgp->router_id.s_addr);
-				write_uint32_be(data + 12, peer->remote_id.s_addr);
-				write_uint64_be(data + 16, pkt_id);
-				data[24] = 0x00; 
+
 				
 				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof data);
 			}
