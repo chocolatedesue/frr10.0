@@ -3824,102 +3824,149 @@ int bgp_link_state_receive(struct peer_connection *connection,
 				 struct peer *peer, bgp_size_t size)
 {
 	struct stream *s;
-	uint32_t src_router_id, dst_router_id;
-	uint64_t seq_id;
-	uint8_t final_flip_id;
+	uint64_t link_nlri_count;
 	char debug_buf[512];
-	char src_router_id_str[INET_ADDRSTRLEN], dst_router_id_str[INET_ADDRSTRLEN];
 	char local_router_id_str[INET_ADDRSTRLEN], remote_router_id_str[INET_ADDRSTRLEN];
+	bool has_new_nlri = false;
 
 	s = peer->curr;
-	src_router_id = stream_getl(s);
-	dst_router_id = stream_getl(s);
 	
-	seq_id = stream_getq(s);
-	final_flip_id = stream_getc(s);
-
-	int flag = 0;
-
-	struct tvr_nlri rec_link_nlri;
-	rec_link_nlri.type = LINK;  // 或 LINK, PREFIX
-	tvr_db_assign_link_nlri(
-		&rec_link_nlri.u.link_nlri, src_router_id, dst_router_id, in6addr_any,
-			0, 0, 1, seq_id);
+	// 记录数据开始位置（已经跳过了 BGP 头部）
+	size_t data_start_pos = stream_get_getp(s);
 	
-	struct tvr_link_nlri* pre_link_nlri = lnlri_rb_find(
-		&peer->bgp->db->lnlri_rb_root, &rec_link_nlri.u.link_nlri);
-
-	if (!pre_link_nlri || (pre_link_nlri && pre_link_nlri->attr.spf_status != final_flip_id)) {
-		tvr_db_process(peer -> bgp -> db, &rec_link_nlri, false);
-		
-		struct tvr_nlri local_node_nlri, remote_node_nlri;
-		
-		local_node_nlri.type = NODE, remote_node_nlri.type = NODE;
-		tvr_db_assign_node_nlri(
-			&local_node_nlri.u.node_nlri, src_router_id, 0, 1 , seq_id);
-		tvr_db_assign_node_nlri(
-			&remote_node_nlri.u.node_nlri, dst_router_id, 0, 1 , seq_id);
-		tvr_db_process(peer -> bgp -> db, &local_node_nlri, false);
-		tvr_db_process(peer -> bgp -> db, &remote_node_nlri, false);
-		
-	} else {
-		flag = 1;
+	// 首先读取 Link NLRI 数量（8字节）
+	link_nlri_count = stream_getq(s);
+	
+	if (link_nlri_count == 0) {
+		return BGP_PACKET_NOOP;
 	}
 
+	// 批量处理每个 Link NLRI
+	for (uint64_t i = 0; i < link_nlri_count; i++) {
+		uint32_t local_node, remote_node;
+		uint64_t seq_num;
+		uint8_t spf_status;
+		
+		// 读取单个 NLRI 数据（17字节：local_node(4) + remote_node(4) + seq_num(8) + spf_status(1)）
+		local_node = stream_getl(s);
+		remote_node = stream_getl(s);
+		seq_num = stream_getq(s);
+		spf_status = stream_getc(s);
 
- 
+		// 创建用于查找的 Link NLRI
+		struct tvr_nlri rec_link_nlri;
+		rec_link_nlri.type = LINK;
+		tvr_db_assign_link_nlri(
+			&rec_link_nlri.u.link_nlri, local_node, remote_node, in6addr_any,
+			0, 0, spf_status, seq_num);
+		
+		// 查找数据库中是否存在相同的 NLRI
+		struct tvr_link_nlri* pre_link_nlri = lnlri_rb_find(
+			&peer->bgp->db->lnlri_rb_root, &rec_link_nlri.u.link_nlri);
 
-	inet_ntop (
-	AF_INET, &src_router_id, src_router_id_str, INET_ADDRSTRLEN);
-	inet_ntop (
-	AF_INET, &dst_router_id, dst_router_id_str, INET_ADDRSTRLEN);
-	inet_ntop (
-	AF_INET, &peer->bgp->router_id.s_addr, local_router_id_str,
-		INET_ADDRSTRLEN);
-	inet_ntop (
-	AF_INET, &peer->remote_id.s_addr, remote_router_id_str,
-		INET_ADDRSTRLEN);
+		// 如果不存在或状态不同，则处理
+		if (!pre_link_nlri || (pre_link_nlri && pre_link_nlri->attr.spf_status != spf_status)) {
+			// 处理 Link NLRI
+			tvr_db_process(peer->bgp->db, &rec_link_nlri, false);
+			
+			// 创建并处理对应的 Node NLRI
+			struct tvr_nlri local_node_nlri, remote_node_nlri;
+			
+			local_node_nlri.type = NODE;
+			remote_node_nlri.type = NODE;
+			tvr_db_assign_node_nlri(
+				&local_node_nlri.u.node_nlri, local_node, 0, 1, seq_num);
+			tvr_db_assign_node_nlri(
+				&remote_node_nlri.u.node_nlri, remote_node, 0, 1, seq_num);
+			tvr_db_process(peer->bgp->db, &local_node_nlri, false);
+			tvr_db_process(peer->bgp->db, &remote_node_nlri, false);
+			
+			has_new_nlri = true;
+		}
+	}
+
+	// 如果没有新的 NLRI，则记录为重复
+	int flag = has_new_nlri ? 0 : 1;
+
+	// 获取第一个 NLRI 的信息用于日志记录
+	uint32_t first_local_node = 0, first_remote_node = 0;
+	uint8_t first_spf_status = 0;
+	
+	if (link_nlri_count > 0) {
+		// 重新定位到第一个 NLRI 的位置（data_start_pos + 8字节的计数）
+		stream_set_getp(s, data_start_pos + 8);
+		first_local_node = stream_getl(s);
+		first_remote_node = stream_getl(s);
+		stream_getq(s); // 跳过 seq_num，我们不在日志中使用它
+		first_spf_status = stream_getc(s);
+	}
+
+	char first_local_node_str[INET_ADDRSTRLEN], first_remote_node_str[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &first_local_node, first_local_node_str, INET_ADDRSTRLEN);
+	inet_ntop(AF_INET, &first_remote_node, first_remote_node_str, INET_ADDRSTRLEN);
+	inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, local_router_id_str, INET_ADDRSTRLEN);
+	inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_router_id_str, INET_ADDRSTRLEN);
 	
 	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
-	if (src_router_id == peer -> bgp -> router_id.s_addr || flag) {
+	
+	// 检查是否有任何一个 NLRI 是从本地路由器发起的，或者没有新的 NLRI
+	bool is_self_originated = false;
+	if (link_nlri_count > 0 && first_local_node == peer->bgp->router_id.s_addr) {
+		is_self_originated = true;
+	}
+	
+	if (is_self_originated || !has_new_nlri) {
 		snprintf(debug_buf, sizeof(debug_buf),
-		 "[%s] rcv duplicate LINKSTATE from [%s], src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u, flag: %d\n",
-		 local_router_id_str, remote_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id,flag);
-		 write (fp1, debug_buf, strlen(debug_buf));
+		 "[%s] rcv duplicate LINKSTATE from [%s], count: %llu, first_local: %s, first_remote: %s, first_spf_status: %u, flag: %d\n",
+		 local_router_id_str, remote_router_id_str, (unsigned long long)link_nlri_count, 
+		 first_local_node_str, first_remote_node_str, first_spf_status, flag);
+		 write(fp1, debug_buf, strlen(debug_buf));
 	} else {
 		snprintf(debug_buf, sizeof(debug_buf),
-		 "[%s] rcv Diff LINKSTATE from [%s], src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
-		local_router_id_str, remote_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id);
+		 "[%s] rcv New LINKSTATE from [%s], count: %llu, first_local: %s, first_remote: %s, first_spf_status: %u\n",
+		local_router_id_str, remote_router_id_str, (unsigned long long)link_nlri_count,
+		first_local_node_str, first_remote_node_str, first_spf_status);
 
-		write (fp1, debug_buf, strlen(debug_buf));
+		write(fp1, debug_buf, strlen(debug_buf));
 
 		struct listnode *node, *nnode;
 		struct peer *tmp_peer;
 
 		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
-			if (tmp_peer -> connection -> status != Established)
+			if (tmp_peer->connection->status != Established)
 				continue;
 			if (tmp_peer == peer)
 				continue;
 			char tmp_buf[512];
 			char tmp_peer_router_id_str[INET_ADDRSTRLEN];
-			inet_ntop (
-			AF_INET, &tmp_peer->bgp->router_id.s_addr,
+			inet_ntop(AF_INET, &tmp_peer->bgp->router_id.s_addr,
 			tmp_peer_router_id_str, INET_ADDRSTRLEN);
 			snprintf(tmp_buf, sizeof(tmp_buf),
-			 "[%s] rcv state and send to connected peer %s, src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
-			 local_router_id_str, tmp_peer_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id);
-			write (fp1, tmp_buf, strlen(tmp_buf));
+			 "[%s] rcv state and send to connected peer %s, count: %llu, first_local: %s, first_remote: %s, first_spf_status: %u\n",
+			 local_router_id_str, tmp_peer_router_id_str, (unsigned long long)link_nlri_count,
+			 first_local_node_str, first_remote_node_str, first_spf_status);
+			write(fp1, tmp_buf, strlen(tmp_buf));
 
-			uint8_t data[17];
-			write_uint32_be(data, src_router_id);
-			write_uint32_be(data + 4, dst_router_id);
-			write_uint64_be(data + 8, seq_id);
-			data[16] = final_flip_id;
+			// 转发原始数据包
+			// 重新创建数据包内容进行转发
+			uint8_t forward_data[8 + link_nlri_count * 17];
+			write_uint64_be(forward_data, link_nlri_count);
+			
+			// 重新读取并复制所有 NLRI 数据
+			stream_set_getp(s, data_start_pos + 8); // 重新定位到第一个 NLRI
+			for (uint64_t i = 0; i < link_nlri_count; i++) {
+				uint32_t local_node = stream_getl(s);
+				uint32_t remote_node = stream_getl(s);
+				uint64_t seq_num = stream_getq(s);
+				uint8_t spf_status = stream_getc(s);
+				
+				write_uint32_be(forward_data + 8 + i * 17, local_node);
+				write_uint32_be(forward_data + 12 + i * 17, remote_node);
+				write_uint64_be(forward_data + 16 + i * 17, seq_num);
+				forward_data[24 + i * 17] = spf_status;
+			}
 
-
-			bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof(data));
-
+			bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, forward_data, sizeof(forward_data));
 		}
 	}
 
@@ -4166,7 +4213,6 @@ static void bgp_write_customize(struct peer_connection *connection,
 			     struct peer *peer, uint8_t msg_type, struct stream *s)
 {
 	int ret, val;
-	uint8_t type;
 	
 	/* There should be at least one packet. */
 	// s = stream_fifo_pop(connection->obuf);
@@ -4198,8 +4244,8 @@ static void bgp_write_customize(struct peer_connection *connection,
 			 sizeof(val));
 
 	/* Retrieve BGP packet type. */
-	stream_set_getp(s, BGP_MARKER_SIZE + 2);
-	type = stream_getc(s);
+	// stream_set_getp(s, BGP_MARKER_SIZE + 2);
+	// type = stream_getc(s);
 
 	// assert(type == msg_type);
 

@@ -5,9 +5,11 @@
  */
 
 #include <fcntl.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <zebra.h>
 
+#include "compiler.h"
 #include "linklist.h"
 #include "prefix.h"
 #include "sockunion.h"
@@ -1310,14 +1312,15 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 					(void)bytes_written;
 					close(fp1);
 				}
-				uint8_t data[9];
-				write_uint32_be(data, peer->bgp->router_id.s_addr);
-				write_uint32_be(data + 4, peer->remote_id.s_addr);
-				write_uint64_be(data + 8, pkt_id);
-				data[8] = 0x00;  // final_flip_id
+				uint8_t data[25];
+				const uint64_t num = 1;
+				write_uint64_be (data,num); 
+				write_uint32_be(data + 8, peer->bgp->router_id.s_addr);
+				write_uint32_be(data + 12, peer->remote_id.s_addr);
+				write_uint64_be(data + 16, pkt_id);
+				data[24] = 0x00; 
 				
-				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof(data));
-			// bgp_notify_send_with_data(tmp_peer->connection, BGP_NOTIFY_CEASE, BGP_NOTIFY_SUBCODE_UNSPECIFIC, data, sizeof(data));
+				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof data);
 			}
 		}
 	}	
@@ -2331,7 +2334,7 @@ bgp_establish(struct peer_connection *connection)
 		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 
 
-		struct tvr_nlri nlri;
+		// struct tvr_nlri nlri;
 		// nlri.type = NODE;
 		uint64_t seq_id = generate_simple_id(peer -> bgp->id_gen	);
 		
@@ -2360,6 +2363,21 @@ bgp_establish(struct peer_connection *connection)
 		struct listnode *node, *nnode;
 		struct peer *tmp_peer;
 
+		const uint64_t link_nlri_len = lnlri_rb_count(&peer -> bgp -> db->lnlri_rb_root);
+
+		uint8_t data[link_nlri_len * 17 + 8];
+		write_uint64_be(data, link_nlri_len);
+
+		struct tvr_link_nlri *link_nlri;
+		int idx = 0;
+		frr_each_safe(lnlri_rb, &peer -> bgp -> db->lnlri_rb_root, link_nlri) {
+			write_uint32_be(data + 8 + idx * 17, link_nlri->local_node);
+			write_uint32_be(data + 12 + idx * 17, link_nlri->remote_node);
+			write_uint64_be(data + 16 + idx * 17, link_nlri->attr.seq_num);
+			data[24 + idx * 17] = link_nlri->attr.spf_status;
+			idx++;
+		}
+
 
 		/* Iterate through all peers in the BGP instance */
 		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
@@ -2385,17 +2403,9 @@ bgp_establish(struct peer_connection *connection)
 				
 				if (fp1 != -1) {
 					write(fp1, debug_buf, strlen(debug_buf));
-					
 				}
 
-				uint8_t data[17];
-				write_uint32_be(data, peer->bgp->router_id.s_addr);
-				write_uint32_be(data + 4, tmp_peer->remote_id.s_addr);
-				write_uint64_be(data + 8, seq_id);
-				data[16] = 0x01;  // flags, set to 0 for now
-
-
-				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof(data));
+				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof data);
 				
 			}
 		}

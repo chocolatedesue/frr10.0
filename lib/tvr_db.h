@@ -10,6 +10,7 @@
 #ifndef _FRR_TVR_DB_H_
 #define _FRR_TVR_DB_H_
 
+#include <stdint.h>
 #include "typesafe.h"
 #include "prefix.h"
 #include "vty.h"
@@ -37,7 +38,7 @@ DEFINE_MTYPE_STATIC(LIB, TVR_DB, "Time Variant Routing Database");
 PREDECL_RBTREE_UNIQ(nnlri_rb);
 
 struct tvr_node_nlri {
-    uint64_t local_node;
+    uint32_t local_node;
     uint64_t time_stamp;
 
     struct {
@@ -65,8 +66,8 @@ DECLARE_RBTREE_UNIQ(nnlri_rb, struct tvr_node_nlri, entry, node_nlri_cmp);
 PREDECL_RBTREE_UNIQ(lnlri_rb);
 
 struct tvr_link_nlri {
-    uint64_t local_node;
-    uint64_t remote_node;
+    uint32_t local_node;
+    uint32_t remote_node;
     struct in6_addr link_addr;
     uint64_t time_stamp;
 
@@ -106,7 +107,7 @@ DECLARE_RBTREE_UNIQ(lnlri_rb, struct tvr_link_nlri, entry, link_nlri_cmp);
 PREDECL_RBTREE_UNIQ(pnlri_rb);
 
 struct tvr_prefix_nlri {
-    uint64_t local_node;
+    uint32_t local_node;
     uint8_t prefixlen;
     struct in6_addr prefix;
     uint64_t time_stamp;
