@@ -3858,7 +3858,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		rec_link_nlri.type = LINK;
 		tvr_db_assign_link_nlri(
 			&rec_link_nlri.u.link_nlri, local_node, remote_node, in6addr_any,
-			0, 0, spf_status, seq_num);
+			0, 1, spf_status, seq_num);
 		
 		// 查找数据库中是否存在相同的 NLRI
 		struct tvr_link_nlri* pre_link_nlri = lnlri_rb_find(
