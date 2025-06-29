@@ -1304,7 +1304,7 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 		local_link_nlri.type = LINK;
 		tvr_db_assign_link_nlri(
 			&local_link_nlri.u.link_nlri, src_router_id, dst_router_id, in6addr_any,
-			0, 0, 0, seq_id);
+			0, 0, 1, seq_id);
 		tvr_db_process(peer->bgp->db, &local_link_nlri, false);
 
 		// Phase 2: Prepare batch format for single NLRI (consistent with bgp_establish)
@@ -1314,7 +1314,7 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 		write_uint32_be(data + 8, src_router_id);
 		write_uint32_be(data + 12, dst_router_id);
 		write_uint64_be(data + 16, seq_id);
-		data[24] = 0x00;  // spf_status = 0 (disconnected)
+		data[24] = 0x01;  // spf_status = 0 (disconnected)
 
 		// Phase 3: Traverse peers and send notifications
 		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
@@ -2372,9 +2372,9 @@ bgp_establish(struct peer_connection *connection)
 		uint32_t dst_router_id = peer->remote_id.s_addr;
 
 		tvr_db_assign_node_nlri(
-			&local_node_nlri.u.node_nlri, src_router_id, 0, 1 , seq_id);
+			&local_node_nlri.u.node_nlri, src_router_id, 0, 0, seq_id);
 		tvr_db_assign_node_nlri(
-			&remote_node_nlri.u.node_nlri, dst_router_id, 0, 1 , seq_id);
+			&remote_node_nlri.u.node_nlri, dst_router_id, 0, 0 , seq_id);
 		tvr_db_process(peer -> bgp -> db, &local_node_nlri, false);
 		tvr_db_process(peer -> bgp -> db, &remote_node_nlri, false);
 
@@ -2382,7 +2382,7 @@ bgp_establish(struct peer_connection *connection)
 		local_link_nlri.type = LINK;
 		tvr_db_assign_link_nlri(
 			&local_link_nlri.u.link_nlri, src_router_id, dst_router_id, in6addr_any,
-			0, 0, 1, seq_id);
+			0, 0, 0, seq_id);
 		tvr_db_process(peer -> bgp -> db, &local_link_nlri, false);
 
 		

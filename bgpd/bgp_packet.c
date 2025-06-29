@@ -3875,9 +3875,9 @@ int bgp_link_state_receive(struct peer_connection *connection,
 			local_node_nlri.type = NODE;
 			remote_node_nlri.type = NODE;
 			tvr_db_assign_node_nlri(
-				&local_node_nlri.u.node_nlri, local_node, 0, 1, seq_num);
+				&local_node_nlri.u.node_nlri, local_node, 0, 0, seq_num);
 			tvr_db_assign_node_nlri(
-				&remote_node_nlri.u.node_nlri, remote_node, 0, 1, seq_num);
+				&remote_node_nlri.u.node_nlri, remote_node, 0, 0, seq_num);
 			tvr_db_process(peer->bgp->db, &local_node_nlri, false);
 			tvr_db_process(peer->bgp->db, &remote_node_nlri, false);
 			
