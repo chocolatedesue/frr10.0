@@ -94,4 +94,6 @@ extern void bgp_link_state_send(struct peer_connection *connection,
 
 extern void write_uint32_be(uint8_t *buffer, uint32_t value);
 
+extern void write_uint64_be(uint8_t *buffer, uint64_t value);
+
 #endif /* _QUAGGA_BGP_PACKET_H */

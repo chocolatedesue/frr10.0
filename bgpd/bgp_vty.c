@@ -19710,9 +19710,9 @@ DEFPY(sharp_tvrdb_show,
 	struct bgp* bgp = bgp_get_default();
 	bgp->db = tvr_db_get_instance();
 
-	char debug_buf[256];
-	snprintf(debug_buf, sizeof(debug_buf), "tvrdb_show: db=%p, static db=%p, PID=%d\n", bgp->db, tvr_db_get_instance(), getpid());
-	vty_out(vty, "%s", debug_buf);
+	// char debug_buf[256];
+	// snprintf(debug_buf, sizeof(debug_buf), "tvrdb_show: db=%p, static db=%p, PID=%d\n", bgp->db, tvr_db_get_instance(), getpid());
+	// vty_out(vty, "%s", debug_buf);
 	tvr_db_show(bgp->db, vty);
 	return CMD_SUCCESS;
 }
@@ -19948,7 +19948,7 @@ DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
 		if(route->dist < TVR_INF_DIST) {
 			// TODO: enable the install route feature
 			// TVR_INSTALL_ROUTE(&prefix, route->next_hop);
-			vty_out(vty, "Route %pFX is reachable with distance %u\n",
+			vty_out(vty, "Route %pFX is reachable with distance %llu\n",
 				&prefix, route->dist);
 
 		} else {

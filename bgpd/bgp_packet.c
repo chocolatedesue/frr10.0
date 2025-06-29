@@ -6,6 +6,7 @@
  */
 
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <zebra.h>
 #include <sys/time.h>
@@ -3824,6 +3825,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 {
 	struct stream *s;
 	uint32_t src_router_id, dst_router_id;
+	uint64_t seq_id;
 	uint8_t final_flip_id;
 	char debug_buf[512];
 	char src_router_id_str[INET_ADDRSTRLEN], dst_router_id_str[INET_ADDRSTRLEN];
@@ -3832,20 +3834,34 @@ int bgp_link_state_receive(struct peer_connection *connection,
 	s = peer->curr;
 	src_router_id = stream_getl(s);
 	dst_router_id = stream_getl(s);
+	
+	seq_id = stream_getq(s);
 	final_flip_id = stream_getc(s);
 
+	int flag = 0;
 
-	// struct tvr_nlri nlri;
-	// nlri.type = LINK;  // 或 LINK, PREFIX
-	// nlri.u.link_nlri.local_node = src_router_id;
-	// nlri.u.link_nlri.remote_node = dst_router_id;
-	// nlri.u.link_nlri.time_stamp = 0;
-	// nlri.u.link_nlri.attr.seq_num = generate_simple_id(peer -> bgp->id_gen);
-	
-	// if (!tvr_db_find_nlri(peer->bgp->db, &nlri)) {
-	// 	tvr_db_process(peer -> bgp -> db, &nlri, false);
+	struct tvr_nlri rec_link_nlri;
+	rec_link_nlri.type = LINK;  // 或 LINK, PREFIX
+	tvr_db_assign_link_nlri(
+		&rec_link_nlri.u.link_nlri, src_router_id, dst_router_id, in6addr_any,
+			0, 0, 1, seq_id);
 		
-	// } 
+	
+	if (!tvr_db_find_nlri(peer->bgp->db, &rec_link_nlri)) {
+		tvr_db_process(peer -> bgp -> db, &rec_link_nlri, false);
+		struct tvr_nlri local_node_nlri, remote_node_nlri;
+		
+		local_node_nlri.type = NODE, remote_node_nlri.type = NODE;
+		tvr_db_assign_node_nlri(
+			&local_node_nlri.u.node_nlri, src_router_id, 0, 1 , seq_id);
+		tvr_db_assign_node_nlri(
+			&remote_node_nlri.u.node_nlri, dst_router_id, 0, 1 , seq_id);
+		tvr_db_process(peer -> bgp -> db, &local_node_nlri, false);
+		tvr_db_process(peer -> bgp -> db, &remote_node_nlri, false);
+	} else {
+		
+		// flag = 1;
+	}
 
  
 
@@ -3861,9 +3877,9 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		INET_ADDRSTRLEN);
 	
 	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
-	if (src_router_id == peer -> bgp -> router_id.s_addr) {
+	if (src_router_id == peer -> bgp -> router_id.s_addr || flag) {
 		snprintf(debug_buf, sizeof(debug_buf),
-		 "[%s] rcv Self LINKSTATE from [%s], src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
+		 "[%s] rcv duplicate LINKSTATE from [%s], src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
 		 local_router_id_str, remote_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id);
 		 write (fp1, debug_buf, strlen(debug_buf));
 	} else {
@@ -3876,21 +3892,31 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		struct listnode *node, *nnode;
 		struct peer *tmp_peer;
 
-		// for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
-		// 	if (tmp_peer -> connection -> status != Established)
-		// 		continue;
-		// 	if (tmp_peer == peer)
-		// 		continue;
-		// 	char tmp_buf[512];
-		// 	char tmp_peer_router_id_str[INET_ADDRSTRLEN];
-		// 	inet_ntop (
-		// 	AF_INET, &tmp_peer->bgp->router_id.s_addr,
-		// 	tmp_peer_router_id_str, INET_ADDRSTRLEN);
-		// 	snprintf(tmp_buf, sizeof(tmp_buf),
-		// 	 "[%s] rcv state and send to connected peer %s, src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
-		// 	 local_router_id_str, tmp_peer_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id);
-		// 	write (fp1, tmp_buf, strlen(tmp_buf));
-		// }
+		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
+			if (tmp_peer -> connection -> status != Established)
+				continue;
+			if (tmp_peer == peer)
+				continue;
+			char tmp_buf[512];
+			char tmp_peer_router_id_str[INET_ADDRSTRLEN];
+			inet_ntop (
+			AF_INET, &tmp_peer->bgp->router_id.s_addr,
+			tmp_peer_router_id_str, INET_ADDRSTRLEN);
+			snprintf(tmp_buf, sizeof(tmp_buf),
+			 "[%s] rcv state and send to connected peer %s, src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
+			 local_router_id_str, tmp_peer_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id);
+			write (fp1, tmp_buf, strlen(tmp_buf));
+
+			uint8_t data[17];
+			write_uint32_be(data, src_router_id);
+			write_uint32_be(data + 4, dst_router_id);
+			write_uint64_be(data + 8, seq_id);
+			data[16] = final_flip_id;
+
+
+			bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof(data));
+
+		}
 	}
 
 
@@ -4136,14 +4162,13 @@ void bgp_packet_process_error(struct event *thread)
 
 
 static void bgp_write_customize(struct peer_connection *connection,
-			     struct peer *peer, uint8_t msg_type)
+			     struct peer *peer, uint8_t msg_type, struct stream *s)
 {
 	int ret, val;
 	uint8_t type;
-	struct stream *s;
-
+	
 	/* There should be at least one packet. */
-	s = stream_fifo_pop(connection->obuf);
+	// s = stream_fifo_pop(connection->obuf);
 
 	if (!s)
 		return;
@@ -4211,6 +4236,17 @@ void write_uint32_be(uint8_t *buffer, uint32_t value) {
     buffer[3] = value & 0xFF;
 }
 
+void write_uint64_be(uint8_t *buffer, uint64_t value) {
+	buffer[0] = (value >> 56) & 0xFF;
+	buffer[1] = (value >> 48) & 0xFF;
+	buffer[2] = (value >> 40) & 0xFF;
+	buffer[3] = (value >> 32) & 0xFF;
+	buffer[4] = (value >> 24) & 0xFF;
+	buffer[5] = (value >> 16) & 0xFF;
+	buffer[6] = (value >> 8) & 0xFF;
+	buffer[7] = value & 0xFF;
+}
+
 void bgp_link_state_send(struct peer_connection *connection, 
                          uint8_t msg_type, 
                          const void *data, 
@@ -4263,12 +4299,5 @@ void bgp_link_state_send(struct peer_connection *connection,
     // 4. 设置正确的数据包长度
     bgp_packet_set_size(s);
 
-	// TODO: Use better way to handle obuf
-	stream_fifo_clean(connection->obuf);
-
-	stream_fifo_push(connection->obuf, s);
-
-	bgp_write_customize(connection, peer, msg_type);
-
-
+	bgp_write_customize(connection, peer, msg_type, s);
 }

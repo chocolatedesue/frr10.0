@@ -94,9 +94,9 @@ macro_inline int link_nlri_cmp(const struct tvr_link_nlri *lhs,
         return i;
     }
 
-    if (lhs -> attr.seq_num != rhs -> attr.seq_num) {
-        return numcmp(lhs->attr.seq_num, rhs->attr.seq_num);
-    }
+    // if (lhs -> attr.seq_num != rhs -> attr.seq_num) {
+    //     return numcmp(lhs->attr.seq_num, rhs->attr.seq_num);
+    // }
 
     return numcmp(lhs->time_stamp, rhs->time_stamp);
 }
@@ -183,7 +183,14 @@ extern void tvr_db_show(struct tvr_db *db, struct vty *vty);
 
 extern bool tvr_db_find_nlri(struct tvr_db *db, struct tvr_nlri *nlri);
 
+extern bool tvr_db_assign_node_nlri(struct tvr_node_nlri* nlri, uint64_t local_node,
+                    uint64_t time_stamp, uint8_t spf_status,
+                    uint64_t seq_num);
 
+extern bool tvr_db_assign_link_nlri(struct tvr_link_nlri* nlri, uint64_t local_node,
+					uint64_t remote_node, struct in6_addr link_addr,
+					uint64_t time_stamp, uint32_t igp_metric,
+					uint8_t spf_status, uint64_t seq_num) ;
 
 #ifdef __cplusplus
 }

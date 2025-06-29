@@ -7,6 +7,8 @@
  */
 
 #include "tvr_db.h"
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include "memory.h"
 
 // #if USE_SHARED_TVR_DB
@@ -268,20 +270,24 @@ static void tvr_show_node_nlri(struct tvr_db *db, struct vty *vty) {
 		if(is_first) {
 	 		vty_out(vty,
 			"\n"
-		    "             [%12s,%12s],%12s,%12s\n",
+		    "             [%12s,%12s],%12s,%12s,%12s\n",
 			"Local Node",
 			"Time Stamp",
 			"SPF Status",
-			"SEQ Number");
+			"SEQ Number", "Local IP");
 			is_first = false;
 		}
 
+		char local_node_ip_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &nlri->local_node, local_node_ip_str, INET_ADDRSTRLEN);
+
 		vty_out(vty,
-			"  Node NLRI: [%12llu,%12llu],%12u,%12llu\n",
+			"  Node NLRI: [%12llu,%12llu],%12u,%12llu,%12s\n",
 			nlri->local_node,
 			nlri->time_stamp,
 			nlri->attr.spf_status,
-			nlri->attr.seq_num
+			nlri->attr.seq_num,
+			local_node_ip_str
 		);
 	}
 }
@@ -297,26 +303,35 @@ static void tvr_show_link_nlri(struct tvr_db *db, struct vty *vty) {
 		if(is_first) {
  			vty_out(vty,
 			"\n"
-		    "             [%12s,%12s,%12s,%12s],%12s,%12s,%12s\n",
+		    "             [%12s,%12s,%12s,%12s],%12s,%12s,%12s,%12s,%12s\n",
 			"Local Node",
 			"Remote Node",
 			"Link Address",
 			"Time Stamp",
 			"IGP Metric",
 			"SPF Status",
-			"SEQ Number");
+			"SEQ Number",
+			"Local IP",
+			"Remote IP"
+		);
 			is_first = false;
 		}
 
+		char local_node_ip_str[INET_ADDRSTRLEN], remote_node_ip_str[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &nlri->local_node, local_node_ip_str, INET_ADDRSTRLEN);
+		inet_ntop(AF_INET, &nlri->remote_node, remote_node_ip_str, INET_ADDRSTRLEN);
+
 		vty_out(vty,
-			"  Link NLRI: [%12llu,%12llu,%12s,%12llu],%12u,%12u,%12llu\n",
+			"  Link NLRI: [%12llu,%12llu,%12s,%12llu],%12u,%12u,%12llu,%12s,%12s\n",
 			nlri->local_node,
 			nlri->remote_node,
 			str,
 			nlri->time_stamp,
 			nlri->attr.igp_metric,
 			nlri->attr.spf_status,
-			nlri->attr.seq_num
+			nlri->attr.seq_num,
+			local_node_ip_str,
+			remote_node_ip_str
 		);
 	}
 }
@@ -371,4 +386,41 @@ void tvr_db_show(struct tvr_db *db, struct vty *vty) {
 		lnlri_rb_count(&db->lnlri_rb_root),
 		pnlri_rb_count(&db->pnlri_rb_root)
 	);
+}
+
+
+bool tvr_db_assign_node_nlri(struct tvr_node_nlri* nlri, uint64_t local_node,
+                    uint64_t time_stamp, uint8_t spf_status,
+                    uint64_t seq_num) 
+{
+	if (nlri == NULL) {
+		return false;
+	}
+	
+	nlri->local_node = local_node;
+	nlri->time_stamp = time_stamp;
+	nlri->attr.spf_status = spf_status;
+	nlri->attr.seq_num = seq_num;
+
+	return true;							
+}
+
+bool tvr_db_assign_link_nlri(struct tvr_link_nlri* nlri, uint64_t local_node,
+					uint64_t remote_node, struct in6_addr link_addr,
+					uint64_t time_stamp, uint32_t igp_metric,
+					uint8_t spf_status, uint64_t seq_num) 
+{
+	if (nlri == NULL) {
+		return false;
+	}
+	
+	nlri->local_node = local_node;
+	nlri->remote_node = remote_node;
+	nlri->link_addr = link_addr;
+	nlri->time_stamp = time_stamp;
+	nlri->attr.igp_metric = igp_metric;
+	nlri->attr.spf_status = spf_status;
+	nlri->attr.seq_num = seq_num;
+
+	return true;							
 }
