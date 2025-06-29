@@ -3845,10 +3845,13 @@ int bgp_link_state_receive(struct peer_connection *connection,
 	tvr_db_assign_link_nlri(
 		&rec_link_nlri.u.link_nlri, src_router_id, dst_router_id, in6addr_any,
 			0, 0, 1, seq_id);
-		
 	
-	if (!tvr_db_find_nlri(peer->bgp->db, &rec_link_nlri)) {
+	struct tvr_link_nlri* pre_link_nlri = lnlri_rb_find(
+		&peer->bgp->db->lnlri_rb_root, &rec_link_nlri.u.link_nlri);
+
+	if (!pre_link_nlri || (pre_link_nlri && pre_link_nlri->attr.spf_status != final_flip_id)) {
 		tvr_db_process(peer -> bgp -> db, &rec_link_nlri, false);
+		
 		struct tvr_nlri local_node_nlri, remote_node_nlri;
 		
 		local_node_nlri.type = NODE, remote_node_nlri.type = NODE;
@@ -3858,10 +3861,11 @@ int bgp_link_state_receive(struct peer_connection *connection,
 			&remote_node_nlri.u.node_nlri, dst_router_id, 0, 1 , seq_id);
 		tvr_db_process(peer -> bgp -> db, &local_node_nlri, false);
 		tvr_db_process(peer -> bgp -> db, &remote_node_nlri, false);
-	} else {
 		
-		// flag = 1;
+	} else {
+		flag = 1;
 	}
+
 
  
 
@@ -3879,8 +3883,8 @@ int bgp_link_state_receive(struct peer_connection *connection,
 	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 	if (src_router_id == peer -> bgp -> router_id.s_addr || flag) {
 		snprintf(debug_buf, sizeof(debug_buf),
-		 "[%s] rcv duplicate LINKSTATE from [%s], src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u\n",
-		 local_router_id_str, remote_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id);
+		 "[%s] rcv duplicate LINKSTATE from [%s], src_router_id_str: %s, dst_router_id_str: %s, final_flip_id: %u, flag: %d\n",
+		 local_router_id_str, remote_router_id_str, src_router_id_str, dst_router_id_str, final_flip_id,flag);
 		 write (fp1, debug_buf, strlen(debug_buf));
 	} else {
 		snprintf(debug_buf, sizeof(debug_buf),
@@ -3919,9 +3923,6 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		}
 	}
 
-
-	
-	// write (fp1, debug_buf, strlen(debug_buf));
 	close(fp1);
 	return BGP_PACKET_NOOP;
 

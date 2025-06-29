@@ -6,6 +6,7 @@
  */
 #include <zebra.h>
 
+#include "bgpd/bgpd.h"
 #include "vty.h"
 #include "command.h"
 #include "prefix.h"
@@ -1439,314 +1440,332 @@ DEFPY (tc_filter_rate,
 	return CMD_SUCCESS;
 }
 
-#define TVR_DB_STR "Time Variant Routing Database\n"
+// #define TVR_DB_STR "Time Variant Routing Database\n"
 
-#define TVR_INSTALL_ROUTE(prefix_ptr, next_hop) install_routes_magic( \
-		self, vty, argc, argv, \
-		NULL, NULL, NULL, \
-		prefix_ptr, \
-		NULL, (struct in_addr) { INADDR_ANY }, NULL, \
-		next_hop, \
-		NULL, NULL, NULL, (struct in_addr) { INADDR_ANY }, NULL, (struct in6_addr) {}, NULL, \
-		1, \
-		NULL, 0, NULL, 0, NULL, NULL, NULL \
-	)
+// #define TVR_INSTALL_ROUTE(prefix_ptr, next_hop) install_routes_magic( \
+// 		self, vty, argc, argv, \
+// 		NULL, NULL, NULL, \
+// 		prefix_ptr, \
+// 		NULL, (struct in_addr) { INADDR_ANY }, NULL, \
+// 		next_hop, \
+// 		NULL, NULL, NULL, (struct in_addr) { INADDR_ANY }, NULL, (struct in6_addr) {}, NULL, \
+// 		1, \
+// 		NULL, 0, NULL, 0, NULL, NULL, NULL \
+// 	)
 
-#define TVR_REMOVE_ROUTE(prefix_ptr) remove_routes_magic( \
-		self, vty, argc, argv, \
-		NULL, NULL, NULL, \
-		prefix_ptr, \
-		NULL, \
-		1, \
-		NULL, 0, NULL \
-	)
+// #define TVR_REMOVE_ROUTE(prefix_ptr) remove_routes_magic( \
+// 		self, vty, argc, argv, \
+// 		NULL, NULL, NULL, \
+// 		prefix_ptr, \
+// 		NULL, \
+// 		1, \
+// 		NULL, 0, NULL \
+// 	)
 
-DEFPY(sharp_tvrdb_create,
-	  sharp_tvrdb_create_cmd,
-	  "tvrdb create",
-	  TVR_DB_STR 
-	  "Creation\n")
-{
-	if(sg.db != NULL) {
-		vty_out(vty, "Database already exists!\n");
-		return CMD_WARNING;
-	}
-
-	sg.db = tvr_db_create();
-	if(sg.db == NULL) {
-		vty_out(vty, "Failed!\n");	
-		return CMD_WARNING;
-	}
-	vty_out(vty, "Succeeded!\n");
-
-	return CMD_SUCCESS;
-}
-
-DEFPY(sharp_tvrdb_destroy,
-	  sharp_tvrdb_destroy_cmd,
-	  "tvrdb destroy",
-	  TVR_DB_STR 
-	  "Destruction\n")
-{
-	if(sg.db == NULL) {
-		vty_out(vty, "Database does not exist!\n");
-		return CMD_WARNING;
-	}
+// DEFPY(sharp_tvrdb_create,
+// 	  sharp_tvrdb_create_cmd,
+// 	  "tvrdb create",
+// 	  TVR_DB_STR 
+// 	  "Creation\n")
+// {
 	
-	tvr_db_destroy(&sg.db);
-	if(sg.db != NULL) {
-		vty_out(vty, "Failed!\n");	
-		return CMD_WARNING;
-	}
-	vty_out(vty, "Succeeded!\n");
-	return CMD_SUCCESS;
-}
-
-DEFPY(sharp_tvrdb_show,
-	  sharp_tvrdb_show_cmd,
-	  "tvrdb show",
-	  TVR_DB_STR 
-	  "Show\n")
-{
-	if(sg.db == NULL) {
-		vty_out(vty, "Database does not exist!\n");
-		return CMD_WARNING;
-	}
-	tvr_db_show(sg.db, vty);
-	return CMD_SUCCESS;
-}
-
-
-DEFPY(sharp_tvrdb_aging,
-	  sharp_tvrdb_aging_cmd,
-	  "tvrdb aging (0-1000000000)$time_stamp",
-	  TVR_DB_STR
-	  "Aging\n")
-{
-	if(sg.db == NULL) {
-		vty_out(vty, "Database does not exist!\n");
-		return CMD_WARNING;
-	}
-	size_t aged_nlri_cnt = tvr_db_aging(sg.db, time_stamp);
-	vty_out(vty, "%ld NLRI(s) aged!\n", aged_nlri_cnt);
-
-	return CMD_SUCCESS;
-}
-
-
-DEFPY(sharp_tvrdb_add_node_nlri,
-	  sharp_tvrdb_add_node_nlri_cmd,
-	  "tvrdb add node_nlri \
-	  (0-1000000000)$local_node \
-	  (0-1000000000)$time_stamp \
-	  (0-255)$spf_status \
-	  (0-1000000000)$seq_num",
-	  TVR_DB_STR
-	  "Add node NLRI\n")
-{
-	struct tvr_nlri nlri;
-	nlri.type = NODE;
-	nlri.u.node_nlri.local_node = local_node;
-	nlri.u.node_nlri.time_stamp = time_stamp;
-	nlri.u.node_nlri.attr.spf_status = spf_status;
-	nlri.u.node_nlri.attr.seq_num = seq_num;
-
-	if(sg.db == NULL) {
-		vty_out(vty, "Database does not exist!\n");
-		return CMD_WARNING;
-	}
-
-	bool success = tvr_db_process(sg.db, &nlri, false);
-	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
-
-	return CMD_SUCCESS;
-}
-
-
-DEFPY(sharp_tvrdb_del_node_nlri,
-	  sharp_tvrdb_del_node_nlri_cmd,
-	  "tvrdb del node_nlri \
-	  (0-1000000000)$local_node \
-	  (0-1000000000)$time_stamp",
-	  TVR_DB_STR
-	  "Delete node NLRI\n")
-{
-	struct tvr_nlri nlri;
-	nlri.type = NODE;
-	nlri.u.node_nlri.local_node = local_node;
-	nlri.u.node_nlri.time_stamp = time_stamp;
-
-	if(sg.db == NULL) {
-		vty_out(vty, "Database does not exist!\n");
-		return CMD_WARNING;
-	}
-
-	bool success = tvr_db_process(sg.db, &nlri, true);
-	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
-
-	return CMD_SUCCESS;
-}
-
-
-DEFPY(sharp_tvrdb_add_link_nlri,
-	  sharp_tvrdb_add_link_nlri_cmd,
-	  "tvrdb add link_nlri \
-	  (0-1000000000)$local_node \
-	  (0-1000000000)$remote_node \
-	  X:X::X:X$link_addr \
-	  (0-1000000000)$time_stamp \
-	  (0-1000000000)$igb_metric \
-	  (0-255)$spf_status \
-	  (0-1000000000)$seq_num",
-	  TVR_DB_STR
-	  "Add link NLRI\n")
-{
-	struct tvr_nlri nlri;
-	nlri.type = LINK;
-	nlri.u.link_nlri.local_node = local_node;
-	nlri.u.link_nlri.remote_node = remote_node;
-	nlri.u.link_nlri.link_addr = link_addr;
-	nlri.u.link_nlri.time_stamp = time_stamp;
-	nlri.u.link_nlri.attr.igp_metric = igb_metric;
-	nlri.u.link_nlri.attr.spf_status = spf_status;
-	nlri.u.link_nlri.attr.seq_num = seq_num;
-
-	if(sg.db == NULL) {
-		vty_out(vty, "Database does not exist!\n");
-		return CMD_WARNING;
-	}
-
-	bool success = tvr_db_process(sg.db, &nlri, false);
-	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
-
-	return CMD_SUCCESS;
-}
-
-
-DEFPY(sharp_tvrdb_del_link_nlri,
-	  sharp_tvrdb_del_link_nlri_cmd,
-	  "tvrdb del link_nlri \
-	  (0-1000000000)$local_node \
-	  (0-1000000000)$remote_node \
-	  X:X::X:X$link_addr \
-	  (0-1000000000)$time_stamp",
-	  TVR_DB_STR
-	  "Delete link NLRI\n")
-{
-	struct tvr_nlri nlri;
-	nlri.type = LINK;
-	nlri.u.link_nlri.local_node = local_node;
-	nlri.u.link_nlri.remote_node = remote_node;
-	nlri.u.link_nlri.link_addr = link_addr;
-	nlri.u.link_nlri.time_stamp = time_stamp;
-
-	if(sg.db == NULL) {
-		vty_out(vty, "Database does not exist!\n");
-		return CMD_WARNING;
-	}
-
-	bool success = tvr_db_process(sg.db, &nlri, true);
-	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
-
-	return CMD_SUCCESS;
-}
-
-
-DEFPY(sharp_tvrdb_add_prefix_nlri,
-	  sharp_tvrdb_add_prefix_nlri_cmd,
-	  "tvrdb add prefix_nlri \
-	  (0-1000000000)$local_node \
-	  X:X::X:X/M$prefix \
-	  (0-1000000000)$time_stamp \
-	  (0-255)$spf_status \
-	  (0-1000000000)$seq_num",
-	  TVR_DB_STR
-	  "Add prefix NLRI\n")
-{
-	struct tvr_nlri nlri;
-	nlri.type = PREFIX;
+// 	struct bgp* bgp = bgp_get_default();
 	
-	nlri.u.prefix_nlri.local_node = local_node;
-	nlri.u.prefix_nlri.prefixlen = prefix->prefixlen;
-	nlri.u.prefix_nlri.prefix = prefix->prefix;
-	nlri.u.prefix_nlri.time_stamp = time_stamp;
-	nlri.u.prefix_nlri.attr.spf_status = spf_status;
-	nlri.u.prefix_nlri.attr.seq_num = seq_num;
+// 	if(bgp->db != NULL) {
+// 		vty_out(vty, "Database already exists!\n");
+// 		return CMD_WARNING;
+// 	}
 
-	if(sg.db == NULL) {
-		vty_out(vty, "Database does not exist!\n");
-		return CMD_WARNING;
-	}
+// 	bgp->db = tvr_db_get_instance();
+// 	if(bgp->db == NULL) {
+// 		vty_out(vty, "Failed!\n");	
+// 		return CMD_WARNING;
+// 	}
+// 	vty_out(vty, "Succeeded!\n");
 
-	bool success = tvr_db_process(sg.db, &nlri, false);
-	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+// 	return CMD_SUCCESS;
+// }
 
-	return CMD_SUCCESS;
-}
-
-
-DEFPY(sharp_tvrdb_del_prefix_nlri,
-	  sharp_tvrdb_del_prefix_nlri_cmd,
-	  "tvrdb del prefix_nlri \
-	  (0-1000000000)$local_node \
-	  X:X::X:X/M$prefix \
-	  (0-1000000000)$time_stamp",
-	  TVR_DB_STR
-	  "Add prefix NLRI\n")
-{
-	struct tvr_nlri nlri;
-	nlri.type = PREFIX;
+// DEFPY(sharp_tvrdb_destroy,
+// 	  sharp_tvrdb_destroy_cmd,
+// 	  "tvrdb destroy",
+// 	  TVR_DB_STR 
+// 	  "Destruction\n")
+// {
+// 	struct bgp* bgp = bgp_get_default();
+// 	if(bgp->db == NULL) {
+// 		vty_out(vty, "Database does not exist!\n");
+// 		return CMD_WARNING;
+// 	}
 	
-	nlri.u.prefix_nlri.local_node = local_node;
-	nlri.u.prefix_nlri.prefixlen = prefix->prefixlen;
-	nlri.u.prefix_nlri.prefix = prefix->prefix;
-	nlri.u.prefix_nlri.time_stamp = time_stamp;
+// 	tvr_db_destroy(&bgp->db);
+// 	if(bgp->db != NULL) {
+// 		vty_out(vty, "Failed!\n");	
+// 		return CMD_WARNING;
+// 	}
+// 	vty_out(vty, "Succeeded!\n");
+// 	return CMD_SUCCESS;
+// }
 
-	if(sg.db == NULL) {
-		vty_out(vty, "Database does not exist!\n");
-		return CMD_WARNING;
-	}
+// DEFPY(sharp_tvrdb_show,
+// 	  sharp_tvrdb_show_cmd,
+// 	  "tvrdb show",
+// 	  TVR_DB_STR 
+// 	  "Show\n")
+// {
+// 	// if(bgp->db == NULL) {
+// 	// 	vty_out(vty, "Database does not exist!\n");
+// 	// 	return CMD_WARNING;
+// 	// }
+// 	struct bgp* bgp = bgp_get_default();
+// 	bgp->db = tvr_db_get_instance();
 
-	bool success = tvr_db_process(sg.db, &nlri, true);
-	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+// 	char debug_buf[256];
+// 	snprintf(debug_buf, sizeof(debug_buf), "tvrdb_show: db=%p, static db=%p, PID=%d\n", bgp->db, tvr_db_get_instance(), getpid());
+// 	vty_out(vty, "%s", debug_buf);
+// 	tvr_db_show(bgp->db, vty);
+// 	return CMD_SUCCESS;
+// }
 
-	return CMD_SUCCESS;
-}
+
+// DEFPY(sharp_tvrdb_aging,
+// 	  sharp_tvrdb_aging_cmd,
+// 	  "tvrdb aging (0-1000000000)$time_stamp",
+// 	  TVR_DB_STR
+// 	  "Aging\n")
+// {
+// 	struct bgp* bgp = bgp_get_default();
+// 	if(bgp->db == NULL) {
+// 		vty_out(vty, "Database does not exist!\n");
+// 		return CMD_WARNING;
+// 	}
+// 	size_t aged_nlri_cnt = tvr_db_aging(bgp->db, time_stamp);
+// 	vty_out(vty, "%ld NLRI(s) aged!\n", aged_nlri_cnt);
+
+// 	return CMD_SUCCESS;
+// }
 
 
-DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
-	  "tvr spf \
-	  (0-1000000000)$src_node \
-	  (0-1000000000)$time_stamp1 \
-	  (0-1000000000)$time_stamp2",
-	  "Time Variant Routing Shortest Path First (SPF)\n")
-{
-	if(sg.db == NULL) {
-		vty_out(vty, "Database does not exist!\n");
-		return CMD_WARNING;
-	}
+// DEFPY(sharp_tvrdb_add_node_nlri,
+// 	  sharp_tvrdb_add_node_nlri_cmd,
+// 	  "tvrdb add node_nlri \
+// 	  (0-1000000000)$local_node \
+// 	  (0-1000000000)$time_stamp \
+// 	  (0-255)$spf_status \
+// 	  (0-1000000000)$seq_num",
+// 	  TVR_DB_STR
+// 	  "Add node NLRI\n")
+// {
+// 	struct tvr_nlri nlri;
+// 	nlri.type = NODE;
+// 	nlri.u.node_nlri.local_node = local_node;
+// 	nlri.u.node_nlri.time_stamp = time_stamp;
+// 	nlri.u.node_nlri.attr.spf_status = spf_status;
+// 	nlri.u.node_nlri.attr.seq_num = seq_num;
 
-	struct tvr_spf *spf;
-	struct tvr_route *route;
+// 	struct bgp* bgp = bgp_get_default();
+// 	if(bgp->db == NULL) {
+// 		vty_out(vty, "Database does not exist!\n");
+// 		return CMD_WARNING;
+// 	}
 
-	spf = tvr_spf_create(sg.db, src_node, time_stamp1, time_stamp2);
+// 	bool success = tvr_db_process(bgp->db, &nlri, false);
+// 	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
 
-	frr_each_safe(route_rb, &spf->route_rb_root, route) {
-		struct prefix_ipv6 prefix;
-		prefix.family = AF_INET6;
-		prefix.prefixlen = route->prefixlen;
-		prefix.prefix = route->prefix;
-		if(route->dist < TVR_INF_DIST) {
-			TVR_INSTALL_ROUTE(&prefix, route->next_hop);
-		} else {
-			TVR_REMOVE_ROUTE(&prefix);
-		}
-	}
+// 	return CMD_SUCCESS;
+// }
 
-	tvr_spf_destroy(&spf);
 
-	return CMD_SUCCESS;
-}
+// DEFPY(sharp_tvrdb_del_node_nlri,
+// 	  sharp_tvrdb_del_node_nlri_cmd,
+// 	  "tvrdb del node_nlri \
+// 	  (0-1000000000)$local_node \
+// 	  (0-1000000000)$time_stamp",
+// 	  TVR_DB_STR
+// 	  "Delete node NLRI\n")
+// {
+// 	struct tvr_nlri nlri;
+// 	nlri.type = NODE;
+// 	nlri.u.node_nlri.local_node = local_node;
+// 	nlri.u.node_nlri.time_stamp = time_stamp;
+
+// 	struct bgp* bgp = bgp_get_default();
+// 	if(bgp->db == NULL) {
+// 		vty_out(vty, "Database does not exist!\n");
+// 		return CMD_WARNING;
+// 	}
+
+// 	bool success = tvr_db_process(bgp->db, &nlri, true);
+// 	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+// 	return CMD_SUCCESS;
+// }
+
+
+// DEFPY(sharp_tvrdb_add_link_nlri,
+// 	  sharp_tvrdb_add_link_nlri_cmd,
+// 	  "tvrdb add link_nlri \
+// 	  (0-1000000000)$local_node \
+// 	  (0-1000000000)$remote_node \
+// 	  X:X::X:X$link_addr \
+// 	  (0-1000000000)$time_stamp \
+// 	  (0-1000000000)$igb_metric \
+// 	  (0-255)$spf_status \
+// 	  (0-1000000000)$seq_num",
+// 	  TVR_DB_STR
+// 	  "Add link NLRI\n")
+// {
+// 	struct tvr_nlri nlri;
+// 	nlri.type = LINK;
+// 	nlri.u.link_nlri.local_node = local_node;
+// 	nlri.u.link_nlri.remote_node = remote_node;
+// 	nlri.u.link_nlri.link_addr = link_addr;
+// 	nlri.u.link_nlri.time_stamp = time_stamp;
+// 	nlri.u.link_nlri.attr.igp_metric = igb_metric;
+// 	nlri.u.link_nlri.attr.spf_status = spf_status;
+// 	nlri.u.link_nlri.attr.seq_num = seq_num;
+
+// 	struct bgp* bgp = bgp_get_default();
+// 	if(bgp->db == NULL) {
+// 		vty_out(vty, "Database does not exist!\n");
+// 		return CMD_WARNING;
+// 	}
+
+// 	bool success = tvr_db_process(bgp->db, &nlri, false);
+// 	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+// 	return CMD_SUCCESS;
+// }
+
+
+// DEFPY(sharp_tvrdb_del_link_nlri,
+// 	  sharp_tvrdb_del_link_nlri_cmd,
+// 	  "tvrdb del link_nlri \
+// 	  (0-1000000000)$local_node \
+// 	  (0-1000000000)$remote_node \
+// 	  X:X::X:X$link_addr \
+// 	  (0-1000000000)$time_stamp",
+// 	  TVR_DB_STR
+// 	  "Delete link NLRI\n")
+// {
+// 	struct tvr_nlri nlri;
+// 	nlri.type = LINK;
+// 	nlri.u.link_nlri.local_node = local_node;
+// 	nlri.u.link_nlri.remote_node = remote_node;
+// 	nlri.u.link_nlri.link_addr = link_addr;
+// 	nlri.u.link_nlri.time_stamp = time_stamp;
+
+// 	struct bgp* bgp = bgp_get_default();
+// 	if(bgp->db == NULL) {
+// 		vty_out(vty, "Database does not exist!\n");
+// 		return CMD_WARNING;
+// 	}
+
+// 	bool success = tvr_db_process(bgp->db, &nlri, true);
+// 	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+// 	return CMD_SUCCESS;
+// }
+
+
+// DEFPY(sharp_tvrdb_add_prefix_nlri,
+// 	  sharp_tvrdb_add_prefix_nlri_cmd,
+// 	  "tvrdb add prefix_nlri \
+// 	  (0-1000000000)$local_node \
+// 	  X:X::X:X/M$prefix \
+// 	  (0-1000000000)$time_stamp \
+// 	  (0-255)$spf_status \
+// 	  (0-1000000000)$seq_num",
+// 	  TVR_DB_STR
+// 	  "Add prefix NLRI\n")
+// {
+// 	struct tvr_nlri nlri;
+// 	nlri.type = PREFIX;
+	
+// 	nlri.u.prefix_nlri.local_node = local_node;
+// 	nlri.u.prefix_nlri.prefixlen = prefix->prefixlen;
+// 	nlri.u.prefix_nlri.prefix = prefix->prefix;
+// 	nlri.u.prefix_nlri.time_stamp = time_stamp;
+// 	nlri.u.prefix_nlri.attr.spf_status = spf_status;
+// 	nlri.u.prefix_nlri.attr.seq_num = seq_num;
+
+// 	struct bgp* bgp = bgp_get_default();
+// 	if(bgp->db == NULL) {
+// 		vty_out(vty, "Database does not exist!\n");
+// 		return CMD_WARNING;
+// 	}
+
+// 	bool success = tvr_db_process(bgp->db, &nlri, false);
+// 	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+// 	return CMD_SUCCESS;
+// }
+
+
+// DEFPY(sharp_tvrdb_del_prefix_nlri,
+// 	  sharp_tvrdb_del_prefix_nlri_cmd,
+// 	  "tvrdb del prefix_nlri \
+// 	  (0-1000000000)$local_node \
+// 	  X:X::X:X/M$prefix \
+// 	  (0-1000000000)$time_stamp",
+// 	  TVR_DB_STR
+// 	  "Add prefix NLRI\n")
+// {
+// 	struct tvr_nlri nlri;
+// 	nlri.type = PREFIX;
+	
+// 	nlri.u.prefix_nlri.local_node = local_node;
+// 	nlri.u.prefix_nlri.prefixlen = prefix->prefixlen;
+// 	nlri.u.prefix_nlri.prefix = prefix->prefix;
+// 	nlri.u.prefix_nlri.time_stamp = time_stamp;
+
+// 	struct bgp* bgp = bgp_get_default();
+// 	if(bgp->db == NULL) {
+// 		vty_out(vty, "Database does not exist!\n");
+// 		return CMD_WARNING;
+// 	}
+
+// 	bool success = tvr_db_process(bgp->db, &nlri, true);
+// 	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+// 	return CMD_SUCCESS;
+// }
+
+
+// DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
+// 	  "tvr spf \
+// 	  (0-1000000000)$src_node \
+// 	  (0-1000000000)$time_stamp1 \
+// 	  (0-1000000000)$time_stamp2",
+// 	  "Time Variant Routing Shortest Path First (SPF)\n")
+// {
+// 	struct bgp* bgp = bgp_get_default();
+// 	if(bgp->db == NULL) {
+// 		vty_out(vty, "Database does not exist!\n");
+// 		return CMD_WARNING;
+// 	}
+
+// 	struct tvr_spf *spf;
+// 	struct tvr_route *route;
+
+// 	spf = tvr_spf_create(bgp->db, src_node, time_stamp1, time_stamp2);
+
+// 	frr_each_safe(route_rb, &spf->route_rb_root, route) {
+// 		struct prefix_ipv6 prefix;
+// 		prefix.family = AF_INET6;
+// 		prefix.prefixlen = route->prefixlen;
+// 		prefix.prefix = route->prefix;
+// 		if(route->dist < TVR_INF_DIST) {
+// 			TVR_INSTALL_ROUTE(&prefix, route->next_hop);
+// 		} else {
+// 			TVR_REMOVE_ROUTE(&prefix);
+// 		}
+// 	}
+
+// 	tvr_spf_destroy(&spf);
+
+// 	return CMD_SUCCESS;
+// }
 
 
 void sharp_vty_init(void)
@@ -1788,17 +1807,17 @@ void sharp_vty_init(void)
 
 	install_element(ENABLE_NODE, &tc_filter_rate_cmd);
 
-	install_element(ENABLE_NODE, &sharp_tvrdb_create_cmd);
-	install_element(ENABLE_NODE, &sharp_tvrdb_destroy_cmd);
-	install_element(ENABLE_NODE, &sharp_tvrdb_show_cmd);
-	install_element(ENABLE_NODE, &sharp_tvrdb_aging_cmd);
-	install_element(ENABLE_NODE, &sharp_tvrdb_add_node_nlri_cmd);
-	install_element(ENABLE_NODE, &sharp_tvrdb_del_node_nlri_cmd);
-	install_element(ENABLE_NODE, &sharp_tvrdb_add_link_nlri_cmd);
-	install_element(ENABLE_NODE, &sharp_tvrdb_del_link_nlri_cmd);
-	install_element(ENABLE_NODE, &sharp_tvrdb_add_prefix_nlri_cmd);
-	install_element(ENABLE_NODE, &sharp_tvrdb_del_prefix_nlri_cmd);
-	install_element(ENABLE_NODE, &sharp_tvr_spf_cmd);
+	// install_element(ENABLE_NODE, &sharp_tvrdb_create_cmd);
+	// install_element(ENABLE_NODE, &sharp_tvrdb_destroy_cmd);
+	// install_element(ENABLE_NODE, &sharp_tvrdb_show_cmd);
+	// install_element(ENABLE_NODE, &sharp_tvrdb_aging_cmd);
+	// install_element(ENABLE_NODE, &sharp_tvrdb_add_node_nlri_cmd);
+	// install_element(ENABLE_NODE, &sharp_tvrdb_del_node_nlri_cmd);
+	// install_element(ENABLE_NODE, &sharp_tvrdb_add_link_nlri_cmd);
+	// install_element(ENABLE_NODE, &sharp_tvrdb_del_link_nlri_cmd);
+	// install_element(ENABLE_NODE, &sharp_tvrdb_add_prefix_nlri_cmd);
+	// install_element(ENABLE_NODE, &sharp_tvrdb_del_prefix_nlri_cmd);
+	// install_element(ENABLE_NODE, &sharp_tvr_spf_cmd);
 
 	return;
 }
