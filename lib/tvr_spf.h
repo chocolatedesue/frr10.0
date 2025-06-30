@@ -11,6 +11,7 @@
 #ifndef _FRR_TVR_SPF_H_
 #define _FRR_TVR_SPF_H_
 
+#include <stdint.h>
 #include "typesafe.h"
 #include "prefix.h"
 #include "tvr_db.h"
@@ -58,7 +59,7 @@ macro_inline int tvr_nprefix_cmp(const struct tvr_nprefix *lhs,
 }
 
 struct tvr_nlink {
-    uint64_t remote_node;
+    uint32_t remote_node;
     struct in6_addr link_addr;
 
     uint32_t igp_metric;
@@ -77,13 +78,13 @@ macro_inline int tvr_nlink_cmp(const struct tvr_nlink *lhs,
 PREDECL_RBTREE_UNIQ(node_rb);
 
 struct tvr_node {
-    uint64_t local_node;
+    uint32_t local_node;
 
     uint8_t spf_status;
     
     bool visited;
     uint64_t dist;
-    struct in6_addr next_hop;
+    uint32_t next_hop;
 
     struct list *prefixes;
     struct list *links;
@@ -106,7 +107,7 @@ struct tvr_route {
     struct in6_addr prefix;
 
     uint64_t dist;
-    struct in6_addr next_hop;
+    uint32_t next_hop;
 
     struct route_rb_item entry;
 };
@@ -128,7 +129,7 @@ struct tvr_spf {
 	struct route_rb_head route_rb_root;
 };
 
-extern struct tvr_spf *tvr_spf_create(struct tvr_db *db, uint64_t src_node, uint64_t time_stamp1, uint64_t time_stamp2);
+extern struct tvr_spf *tvr_spf_create(struct tvr_db *db, uint32_t src_node, uint64_t time_stamp1, uint64_t time_stamp2);
 
 extern void tvr_spf_destroy(struct tvr_spf **spf);
 
