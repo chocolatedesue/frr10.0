@@ -133,6 +133,32 @@ extern struct tvr_spf *tvr_spf_create(struct tvr_db *db, uint32_t src_node, uint
 
 extern void tvr_spf_destroy(struct tvr_spf **spf);
 
+/* Forward declaration for zclient */
+struct zclient;
+
+/* Route installation/uninstallation functions */
+extern int tvr_spf_install_routes(struct tvr_spf *spf, struct zclient *zclient, 
+                                 vrf_id_t vrf_id, uint8_t route_type);
+
+extern int tvr_spf_uninstall_routes(struct tvr_spf *spf, struct zclient *zclient, 
+                                   vrf_id_t vrf_id, uint8_t route_type);
+
+/* Single route installation/uninstallation functions */
+extern int tvr_spf_install_single_route(struct zclient *zclient, const struct prefix *prefix,
+                                       uint32_t next_hop_node, vrf_id_t vrf_id,
+                                       uint8_t route_type, uint32_t metric);
+
+extern int tvr_spf_uninstall_single_route(struct zclient *zclient, const struct prefix *prefix,
+                                         vrf_id_t vrf_id, uint8_t route_type);
+
+/* Convenience functions for string-based prefix input */
+extern int tvr_spf_install_route_from_string(struct zclient *zclient, const char *prefix_str,
+                                            uint32_t next_hop_node, vrf_id_t vrf_id,
+                                            uint8_t route_type, uint32_t metric);
+
+extern int tvr_spf_uninstall_route_from_string(struct zclient *zclient, const char *prefix_str,
+                                              vrf_id_t vrf_id, uint8_t route_type);
+
 #ifdef __cplusplus
 }
 #endif

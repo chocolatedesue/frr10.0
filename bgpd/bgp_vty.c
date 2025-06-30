@@ -19926,7 +19926,8 @@ DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
 	  "tvr spf \
 	  (0-1000000000)$src_node \
 	  (0-1000000000)$time_stamp1 \
-	  (0-1000000000)$time_stamp2",
+	  (0-1000000000)$time_stamp2 \
+	  (0-1)$is_install_route",
 	  "Time Variant Routing Shortest Path First (SPF)\n")
 {
 	struct bgp* bgp = bgp_get_default();
@@ -19937,30 +19938,81 @@ DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
 
 	struct tvr_spf *spf;
 	struct tvr_route *route;
+	int installed_count = 0;
+	int failed_count = 0;
 	
-	vty_out(vty, "Running SPF from node %ld with time stamps %ld to %ld\n",
-		src_node, time_stamp1, time_stamp2);	
+	vty_out(vty, "Running SPF from node %ld with time stamps %ld to %ld",
+		src_node, time_stamp1, time_stamp2);
+	
+	if (is_install_route) {
+		vty_out(vty, " (installing routes to kernel)");
+	}
+	vty_out(vty, "\n");
 
 	spf = tvr_spf_create(bgp->db, src_node, time_stamp1, time_stamp2);
+	if (spf == NULL) {
+		vty_out(vty, "Failed to create SPF instance!\n");
+		return CMD_WARNING;
+	}
+
+	// 获取zclient用于路由安装
+	extern struct zclient *zclient;
 
 	frr_each_safe(route_rb, &spf->route_rb_root, route) {
-		struct prefix_ipv6 prefix;
+		struct prefix prefix;
 		prefix.family = AF_INET6;
 		prefix.prefixlen = route->prefixlen;
-		prefix.prefix = route->prefix;
+		prefix.u.prefix6 = route->prefix;
+		
 		if(route->dist < TVR_INF_DIST) {
-			// TODO: enable the install route feature
-			// TVR_INSTALL_ROUTE(&prefix, route->next_hop);
 			char nexthop_str[INET_ADDRSTRLEN];
 			inet_ntop(AF_INET, &route->next_hop, nexthop_str,
 				  sizeof(nexthop_str));
-			vty_out(vty, "Route %pFX is reachable with distance %llu, nexthop %s\n",
-				&prefix, route->dist, nexthop_str);
-
+			
+			if (is_install_route && zclient && zclient->sock > 0) {
+				// 使用单条路由安装函数
+				int result = tvr_spf_install_single_route(zclient, &prefix, 
+							route->next_hop, VRF_DEFAULT, 
+							ZEBRA_ROUTE_STATIC, (uint32_t)route->dist);
+				if (result > 0) {
+					installed_count++;
+					vty_out(vty, "✓ Installed route %pFX with distance %llu, nexthop %s\n",
+						&prefix, route->dist, nexthop_str);
+				} else {
+					failed_count++;
+					vty_out(vty, "✗ Failed to install route %pFX with distance %llu, nexthop %s\n",
+						&prefix, route->dist, nexthop_str);
+				}
+			} else {
+				vty_out(vty, "Route %pFX is reachable with distance %llu, nexthop %s\n",
+					&prefix, route->dist, nexthop_str);
+			}
 		} else {
-			// TODO: enable the remove route feature
-			// TVR_REMOVE_ROUTE(&prefix);
-			vty_out(vty, "Route %pFX is unreachable\n", &prefix);
+			if (is_install_route) {
+				// 对于不可达路由，尝试卸载（如果之前安装过）
+				if (zclient && zclient->sock > 0) {
+					int result = tvr_spf_uninstall_single_route(zclient, &prefix,
+										VRF_DEFAULT, ZEBRA_ROUTE_BGP);
+					if (result > 0) {
+						vty_out(vty, "✓ Uninstalled unreachable route %pFX\n", &prefix);
+					} else {
+						vty_out(vty, "Route %pFX is unreachable (not previously installed)\n", &prefix);
+					}
+				}
+			} else {
+				vty_out(vty, "Route %pFX is unreachable\n", &prefix);
+			}
+		}
+	}
+
+	if (is_install_route) {
+		vty_out(vty, "\nRoute Installation Summary:\n");
+		vty_out(vty, "  Successfully installed: %d routes\n", installed_count);
+		if (failed_count > 0) {
+			vty_out(vty, "  Failed to install: %d routes\n", failed_count);
+		}
+		if (!zclient || zclient->sock <= 0) {
+			vty_out(vty, "  Warning: zebra client not connected\n");
 		}
 	}
 

@@ -8,6 +8,8 @@
 
 #include "tvr_spf.h"
 #include <stdint.h>
+#include "zclient.h"
+#include "nexthop.h"
 
 DEFINE_MTYPE_STATIC(LIB, TVR_SPF, "Time Variant Routing Shortest Path First (SPF)");
 
@@ -397,4 +399,216 @@ void tvr_spf_destroy(struct tvr_spf **spf) {
     route_rb_fini(&(*spf)->route_rb_root);
     pq_rb_fini(&(*spf)->pq_rb_root);
     XFREE(MTYPE_TVR_SPF, *spf);
+}
+
+static struct in_addr node_id_to_ipv4(uint32_t node_id) {
+    struct in_addr addr;
+    addr.s_addr = htonl(node_id);
+    return addr;
+}
+
+static void tvr_route_to_zapi(struct tvr_route *tvr_route, uint32_t next_hop_node, 
+                              struct zapi_route *api, vrf_id_t vrf_id, uint8_t route_type) {
+    memset(api, 0, sizeof(struct zapi_route));
+    
+    api->vrf_id = vrf_id;
+    api->type = route_type;  // 例如 ZEBRA_ROUTE_STATIC 或自定义的路由类型
+    api->safi = SAFI_UNICAST;
+    api->instance = 0;
+    
+    // 设置目标前缀
+    if (IN6_IS_ADDR_V4MAPPED(&tvr_route->prefix)) {
+        // IPv4-mapped IPv6 address -> IPv4
+        api->prefix.family = AF_INET;
+        api->prefix.prefixlen = tvr_route->prefixlen - 96; // 减去IPv4映射前缀长度
+        memcpy(&api->prefix.u.prefix4, &tvr_route->prefix.s6_addr[12], 4);
+    } else {
+        // 纯IPv6地址
+        api->prefix.family = AF_INET6;
+        api->prefix.prefixlen = tvr_route->prefixlen;
+        api->prefix.u.prefix6 = tvr_route->prefix;
+    }
+    
+    // 设置下一跳
+    if (next_hop_node != 0) {
+        api->nexthop_num = 1;
+        struct zapi_nexthop *nexthop = &api->nexthops[0];
+        
+        nexthop->vrf_id = vrf_id;
+        if (api->prefix.family == AF_INET) {
+            nexthop->type = NEXTHOP_TYPE_IPV4;
+            nexthop->gate.ipv4 = node_id_to_ipv4(next_hop_node);
+        } else {
+            nexthop->type = NEXTHOP_TYPE_IPV6;
+            // 将node_id转换为IPv6地址（需要根据实际场景调整）
+            memset(&nexthop->gate.ipv6, 0, 16);
+            memcpy(&nexthop->gate.ipv6.s6_addr[12], &next_hop_node, 4);
+        }
+    }
+    
+    // 设置metric（距离）
+    if (tvr_route->dist != TVR_INF_DIST) {
+        SET_FLAG(api->message, ZAPI_MESSAGE_METRIC);
+        api->metric = (uint32_t)tvr_route->dist;
+    }
+}
+
+int tvr_spf_install_routes(struct tvr_spf *spf, struct zclient *zclient, 
+                          vrf_id_t vrf_id, uint8_t route_type) {
+    if (spf == NULL || zclient == NULL) {
+        return -1;
+    }
+    
+    struct tvr_route *route;
+    struct zapi_route api;
+    int installed = 0;
+    
+    // 遍历所有计算出的路由
+    frr_each(route_rb, &spf->route_rb_root, route) {
+        // 跳过无法到达的路由
+        if (route->dist == TVR_INF_DIST) {
+            continue;
+        }
+        
+        // 转换为zapi格式
+        tvr_route_to_zapi(route, route->next_hop, &api, vrf_id, route_type);
+        
+        // 发送路由添加请求到zebra
+        if (zclient_route_send(ZEBRA_ROUTE_ADD, zclient, &api) == ZCLIENT_SEND_SUCCESS) {
+            installed++;
+        }
+    }
+    
+    return installed;
+}
+
+int tvr_spf_uninstall_routes(struct tvr_spf *spf, struct zclient *zclient, 
+                            vrf_id_t vrf_id, uint8_t route_type) {
+    if (spf == NULL || zclient == NULL) {
+        return -1;
+    }
+    
+    struct tvr_route *route;
+    struct zapi_route api;
+    int uninstalled = 0;
+    
+    // 遍历所有路由进行删除
+    frr_each(route_rb, &spf->route_rb_root, route) {
+        // 跳过无法到达的路由
+        if (route->dist == TVR_INF_DIST) {
+            continue;
+        }
+        
+        // 转换为zapi格式，但只需要前缀信息用于删除
+        tvr_route_to_zapi(route, 0, &api, vrf_id, route_type);
+        
+        // 发送路由删除请求到zebra
+        if (zclient_route_send(ZEBRA_ROUTE_DELETE, zclient, &api) == ZCLIENT_SEND_SUCCESS) {
+            uninstalled++;
+        }
+    }
+    
+    return uninstalled;
+}
+
+static void tvr_single_route_to_zapi(const struct prefix *prefix, uint32_t next_hop_node,
+                                     struct zapi_route *api, vrf_id_t vrf_id, uint8_t route_type) {
+    memset(api, 0, sizeof(struct zapi_route));
+    
+    api->vrf_id = vrf_id;
+    api->type = route_type;
+    api->safi = SAFI_UNICAST;
+    api->instance = 0;
+    api->message =  ZAPI_MESSAGE_NEXTHOP;
+    
+    // 设置目标前缀
+    api->prefix = *prefix;
+    
+    // 设置下一跳
+    if (next_hop_node != 0) {
+        api->nexthop_num = 1;
+        struct zapi_nexthop *nexthop = &api->nexthops[0];
+        
+        nexthop->vrf_id = vrf_id;
+        if (prefix->family == AF_INET) {
+            nexthop->type = NEXTHOP_TYPE_IPV4;
+            nexthop->gate.ipv4 = node_id_to_ipv4(next_hop_node);
+        } else if (prefix->family == AF_INET6) {
+            nexthop->type = NEXTHOP_TYPE_IPV6;
+            // 将node_id转换为IPv6地址（根据实际场景调整）
+            memset(&nexthop->gate.ipv6, 0, 16);
+            memcpy(&nexthop->gate.ipv6.s6_addr[12], &next_hop_node, 4);
+        }
+    }
+}
+
+int tvr_spf_install_single_route(struct zclient *zclient, const struct prefix *prefix, 
+                                 uint32_t next_hop_node, vrf_id_t vrf_id, 
+                                 uint8_t route_type, uint32_t metric) {
+    if (zclient == NULL || prefix == NULL) {
+        return -1;
+    }
+    
+    struct zapi_route api;
+    
+    // 转换为zapi格式
+    tvr_single_route_to_zapi(prefix, next_hop_node, &api, vrf_id, route_type);
+    
+    // 设置metric（如果提供）
+    if (metric != 0) {
+        SET_FLAG(api.message, ZAPI_MESSAGE_METRIC);
+        api.metric = metric;
+    }
+    
+    // 发送路由添加请求到zebra
+    if (zclient_route_send(ZEBRA_ROUTE_ADD, zclient, &api) == ZCLIENT_SEND_SUCCESS) {
+        return 1;
+    }
+    
+    return 0;
+}
+
+int tvr_spf_uninstall_single_route(struct zclient *zclient, const struct prefix *prefix,
+                                   vrf_id_t vrf_id, uint8_t route_type) {
+    if (zclient == NULL || prefix == NULL) {
+        return -1;
+    }
+    
+    struct zapi_route api;
+    
+    // 转换为zapi格式，删除时只需要前缀信息
+    tvr_single_route_to_zapi(prefix, 0, &api, vrf_id, route_type);
+    
+    // 发送路由删除请求到zebra
+    if (zclient_route_send(ZEBRA_ROUTE_DELETE, zclient, &api) == ZCLIENT_SEND_SUCCESS) {
+        return 1;
+    }
+    
+    return 0;
+}
+
+/* 便利函数：从字符串创建prefix并安装路由 */
+int tvr_spf_install_route_from_string(struct zclient *zclient, const char *prefix_str,
+                                     uint32_t next_hop_node, vrf_id_t vrf_id,
+                                     uint8_t route_type, uint32_t metric) {
+    struct prefix prefix;
+    
+    if (str2prefix(prefix_str, &prefix) == 0) {
+        return -1; // 前缀格式错误
+    }
+    
+    return tvr_spf_install_single_route(zclient, &prefix, next_hop_node, 
+                                       vrf_id, route_type, metric);
+}
+
+/* 便利函数：从字符串创建prefix并卸载路由 */
+int tvr_spf_uninstall_route_from_string(struct zclient *zclient, const char *prefix_str,
+                                        vrf_id_t vrf_id, uint8_t route_type) {
+    struct prefix prefix;
+    
+    if (str2prefix(prefix_str, &prefix) == 0) {
+        return -1; // 前缀格式错误
+    }
+    
+    return tvr_spf_uninstall_single_route(zclient, &prefix, vrf_id, route_type);
 }
