@@ -19937,6 +19937,9 @@ DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
 
 	struct tvr_spf *spf;
 	struct tvr_route *route;
+	
+	vty_out(vty, "Running SPF from node %ld with time stamps %ld to %ld\n",
+		src_node, time_stamp1, time_stamp2);	
 
 	spf = tvr_spf_create(bgp->db, src_node, time_stamp1, time_stamp2);
 
@@ -19948,8 +19951,11 @@ DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
 		if(route->dist < TVR_INF_DIST) {
 			// TODO: enable the install route feature
 			// TVR_INSTALL_ROUTE(&prefix, route->next_hop);
-			vty_out(vty, "Route %pFX is reachable with distance %llu\n",
-				&prefix, route->dist);
+			char nexthop_str[INET_ADDRSTRLEN];
+			inet_ntop(AF_INET, &route->next_hop, nexthop_str,
+				  sizeof(nexthop_str));
+			vty_out(vty, "Route %pFX is reachable with distance %llu, nexthop %s\n",
+				&prefix, route->dist, nexthop_str);
 
 		} else {
 			// TODO: enable the remove route feature

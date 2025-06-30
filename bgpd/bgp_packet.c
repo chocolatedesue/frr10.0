@@ -54,6 +54,7 @@
 #include "bgpd/bgp_flowspec.h"
 #include "bgpd/bgp_trace.h"
 #include "tvr_db.h"
+#include "tvr_spf.h"
 
 DEFINE_HOOK(bgp_packet_dump,
 		(struct peer *peer, uint8_t type, bgp_size_t size,
@@ -3922,6 +3923,11 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		 first_local_node_str, first_remote_node_str, first_spf_status, flag);
 		 write(fp1, debug_buf, strlen(debug_buf));
 	} else {
+
+		// struct tvr_spf *spf  = tvr_spf_create(peer -> bgp->db, peer -> bgp -> router_id.s_addr , 0, 0);
+
+
+
 		snprintf(debug_buf, sizeof(debug_buf),
 		 "[%s] rcv New LINKSTATE from [%s], count: %llu, first_local: %s, first_remote: %s, first_spf_status: %u\n",
 		local_router_id_str, remote_router_id_str, (unsigned long long)link_nlri_count,

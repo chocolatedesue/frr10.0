@@ -7,6 +7,7 @@
  */
 
 #include "tvr_spf.h"
+#include <stdint.h>
 
 DEFINE_MTYPE_STATIC(LIB, TVR_SPF, "Time Variant Routing Shortest Path First (SPF)");
 
@@ -259,7 +260,7 @@ static void build(struct tvr_spf *spf, struct tvr_db *db, uint64_t t1, uint64_t 
     build_from_prefix_nlri(&spf->node_rb_root, &spf->route_rb_root, &db->pnlri_rb_root, t1, t2);
 }
 
-static void dijkstra(struct tvr_spf *spf, uint64_t src_node) {
+static void dijkstra(struct tvr_spf *spf, uint32_t src_node) {
     struct node_rb_head *node_set = &spf->node_rb_root;
     struct route_rb_head *route_set = &spf->route_rb_root;
     struct pq_rb_head *pq = &spf->pq_rb_root;
@@ -280,7 +281,7 @@ static void dijkstra(struct tvr_spf *spf, uint64_t src_node) {
     }
 
     node->dist = 0;
-    node->next_hop = (struct in6_addr) IN6ADDR_LOOPBACK_INIT;
+    node->next_hop = 0;
     pq_rb_add(pq, pq_elem_create(node));
 
     while(pq_rb_count(pq) > 0) {
@@ -349,18 +350,19 @@ static void dijkstra(struct tvr_spf *spf, uint64_t src_node) {
 
             if(node->dist + nlink->igp_metric < rnode->dist) {
                 rnode->dist = node->dist + nlink->igp_metric;
-                if(node->local_node == src_node) {
-                    rnode->next_hop = nlink->link_addr;
-                } else {
-                    rnode->next_hop = node->next_hop;
-                }
+                // if(node->local_node == src_node) {
+                //     rnode->next_hop = src_node ;
+                // } else {
+                //     rnode->next_hop = node->local_node;
+                // }
+                rnode ->next_hop = node->local_node;
                 pq_rb_add(pq, pq_elem_create(rnode));
             }
         }
     }
 }
 
-struct tvr_spf *tvr_spf_create(struct tvr_db *db, uint64_t src_node,
+struct tvr_spf *tvr_spf_create(struct tvr_db *db, uint32_t src_node,
         uint64_t time_stamp1, uint64_t time_stamp2) {
     struct tvr_spf *spf = XCALLOC(MTYPE_TVR_SPF, sizeof(struct tvr_spf));
     node_rb_init(&spf->node_rb_root);

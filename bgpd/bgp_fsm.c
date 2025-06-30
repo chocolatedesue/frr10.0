@@ -1304,7 +1304,7 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 		local_link_nlri.type = LINK;
 		tvr_db_assign_link_nlri(
 			&local_link_nlri.u.link_nlri, src_router_id, dst_router_id, in6addr_any,
-			0, 0, 1, seq_id);
+			0, 1, 1, seq_id);
 		tvr_db_process(peer->bgp->db, &local_link_nlri, false);
 
 		// Phase 2: Prepare batch format for single NLRI (consistent with bgp_establish)
