@@ -352,12 +352,12 @@ static void dijkstra(struct tvr_spf *spf, uint32_t src_node) {
 
             if(node->dist + nlink->igp_metric < rnode->dist) {
                 rnode->dist = node->dist + nlink->igp_metric;
-                // if(node->local_node == src_node) {
-                //     rnode->next_hop = src_node ;
-                // } else {
-                //     rnode->next_hop = node->local_node;
-                // }
-                rnode ->next_hop = node->local_node;
+                if(node->local_node == src_node) {
+                    rnode->next_hop = rnode -> local_node ;
+                } else {
+                    rnode->next_hop = node->next_hop;
+                }
+                // rnode -> next_hop = node->next_hop;
                 pq_rb_add(pq, pq_elem_create(rnode));
             }
         }
