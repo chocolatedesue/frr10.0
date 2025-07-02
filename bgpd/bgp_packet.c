@@ -7,6 +7,7 @@
 
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <zebra.h>
 #include <sys/time.h>
@@ -3848,17 +3849,34 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		uint64_t seq_num;
 		uint8_t spf_status;
 		
-		// 读取单个 NLRI 数据（17字节：local_node(4) + remote_node(4) + seq_num(8) + spf_status(1)）
+		
 		local_node = stream_getl(s);
 		remote_node = stream_getl(s);
+
+		uint8_t ip_type, ip_tlv_len;
+		ip_type = stream_getc(s);
+		ip_tlv_len = stream_getc(s);
+		uint8_t ipv6_addr[16];
+		for (int j = 0; j < ip_tlv_len; j++) {
+			ipv6_addr[j] = stream_getc(s);
+		}
 		seq_num = stream_getq(s);
 		spf_status = stream_getc(s);
 
 		// 创建用于查找的 Link NLRI
 		struct tvr_nlri rec_link_nlri;
 		rec_link_nlri.type = LINK;
+		
+		struct in6_addr peer_addr_v6 = IN6ADDR_ANY_INIT;
+	
+		if (ip_type == 0x02) { // IPv6
+			for (int j = 0; j < 16; j++) {
+				peer_addr_v6.s6_addr[j] = ipv6_addr[j];
+			}
+		} 
+				
 		tvr_db_assign_link_nlri(
-			&rec_link_nlri.u.link_nlri, local_node, remote_node, in6addr_any,
+			&rec_link_nlri.u.link_nlri, local_node, remote_node, peer_addr_v6,
 			0, 1, spf_status, seq_num);
 		
 		// 查找数据库中是否存在相同的 NLRI
@@ -3898,7 +3916,12 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		stream_set_getp(s, data_start_pos + 8);
 		first_local_node = stream_getl(s);
 		first_remote_node = stream_getl(s);
-		stream_getq(s); // 跳过 seq_num，我们不在日志中使用它
+		
+		// 跳过TLV格式的IPv6地址 (18字节: 2字节头部 + 16字节IPv6)
+		stream_forward_getp(s, 18);
+		
+		// 跳过 seq_num (8字节)，然后读取 spf_status
+		stream_forward_getp(s, 8);
 		first_spf_status = stream_getc(s);
 	}
 
@@ -3954,22 +3977,38 @@ int bgp_link_state_receive(struct peer_connection *connection,
 			write(fp1, tmp_buf, strlen(tmp_buf));
 
 			// 转发原始数据包
-			// 重新创建数据包内容进行转发
-			uint8_t forward_data[8 + link_nlri_count * 17];
+			// 重新创建数据包内容进行转发 (新格式: 35字节每个NLRI)
+			uint8_t forward_data[8 + link_nlri_count * 35];
 			write_uint64_be(forward_data, link_nlri_count);
 			
 			// 重新读取并复制所有 NLRI 数据
 			stream_set_getp(s, data_start_pos + 8); // 重新定位到第一个 NLRI
 			for (uint64_t i = 0; i < link_nlri_count; i++) {
+				size_t offset = 8 + i * 35;
+				
 				uint32_t local_node = stream_getl(s);
 				uint32_t remote_node = stream_getl(s);
+				
+				// 读取TLV格式的IPv6地址
+				uint8_t tlv_type = stream_getc(s);
+				uint8_t tlv_length = stream_getc(s);
+				uint8_t ipv6_addr[16];
+				stream_get(ipv6_addr, s, 16);
+				
 				uint64_t seq_num = stream_getq(s);
 				uint8_t spf_status = stream_getc(s);
 				
-				write_uint32_be(forward_data + 8 + i * 17, local_node);
-				write_uint32_be(forward_data + 12 + i * 17, remote_node);
-				write_uint64_be(forward_data + 16 + i * 17, seq_num);
-				forward_data[24 + i * 17] = spf_status;
+				// 写入转发数据
+				write_uint32_be(forward_data + offset, local_node);
+				write_uint32_be(forward_data + offset + 4, remote_node);
+				
+				// 写入TLV格式的IPv6地址
+				forward_data[offset + 8] = tlv_type;
+				forward_data[offset + 9] = tlv_length;
+				memcpy(forward_data + offset + 10, ipv6_addr, 16);
+				
+				write_uint64_be(forward_data + offset + 26, seq_num);
+				forward_data[offset + 34] = spf_status;
 			}
 
 			bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, forward_data, sizeof(forward_data));

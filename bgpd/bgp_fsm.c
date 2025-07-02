@@ -73,6 +73,8 @@ static const char *const bgp_event_str[] = {
 	"Clearing_Completed",
 };
 
+
+
 /* BGP FSM (finite state machine) has three types of functions.  Type
    one is thread functions.  Type two is event functions.  Type three
    is FSM functions.  Timer functions are set by bgp_timer_set
@@ -2371,6 +2373,21 @@ bgp_establish(struct peer_connection *connection)
 		uint32_t src_router_id = peer->bgp->router_id.s_addr;
 		uint32_t dst_router_id = peer->remote_id.s_addr;
 
+		// char addr_str[SU_ADDRSTRLEN];
+		// sockunion2str(peer_addr, addr_str, sizeof(addr_str));
+
+				
+		struct in6_addr peer_addr_v6 = IN6ADDR_ANY_INIT;
+		if (peer -> connection->su.sa.sa_family == AF_INET) {
+			// IPv4映射到IPv6
+			memset(&peer_addr_v6, 0, sizeof(peer_addr_v6));
+			peer_addr_v6.s6_addr[10] = 0xff;
+			peer_addr_v6.s6_addr[11] = 0xff;
+			memcpy(&peer_addr_v6.s6_addr[12], &peer -> connection->su.sin.sin_addr, 4);
+		} else if (peer -> connection->su.sa.sa_family == AF_INET6) {
+			peer_addr_v6 = peer -> connection->su.sin6.sin6_addr;
+		}
+
 		tvr_db_assign_node_nlri(
 			&local_node_nlri.u.node_nlri, src_router_id, 0, 0, seq_id);
 		tvr_db_assign_node_nlri(
@@ -2380,8 +2397,9 @@ bgp_establish(struct peer_connection *connection)
 
 		struct tvr_nlri local_link_nlri;
 		local_link_nlri.type = LINK;
+		
 		tvr_db_assign_link_nlri(
-			&local_link_nlri.u.link_nlri, src_router_id, dst_router_id, in6addr_any,
+			&local_link_nlri.u.link_nlri, src_router_id, dst_router_id, peer_addr_v6,
 			0, 1, 0, seq_id);
 		tvr_db_process(peer -> bgp -> db, &local_link_nlri, false);
 
@@ -2391,16 +2409,27 @@ bgp_establish(struct peer_connection *connection)
 
 		const uint64_t link_nlri_len = lnlri_rb_count(&peer -> bgp -> db->lnlri_rb_root);
 
-		uint8_t data[link_nlri_len * 17 + 8];
+		// 每个NLRI: 4(local_node) + 4(remote_node) + 18(TLV:2+16) + 8(seq_num) + 1(spf_status) = 35字节
+		uint8_t data[link_nlri_len * 35 + 8];
 		write_uint64_be(data, link_nlri_len);
 
 		struct tvr_link_nlri *link_nlri;
 		int idx = 0;
 		frr_each_safe(lnlri_rb, &peer -> bgp -> db->lnlri_rb_root, link_nlri) {
-			write_uint32_be(data + 8 + idx * 17, link_nlri->local_node);
-			write_uint32_be(data + 12 + idx * 17, link_nlri->remote_node);
-			write_uint64_be(data + 16 + idx * 17, link_nlri->attr.seq_num);
-			data[24 + idx * 17] = link_nlri->attr.spf_status;
+			size_t offset = 8 + idx * 35;
+			
+			// 写入 local_node 和 remote_node
+			write_uint32_be(data + offset, link_nlri->local_node);
+			write_uint32_be(data + offset + 4, link_nlri->remote_node);
+			
+			// 写入TLV格式的IPv6地址 (Type=0x02, Length=16, Value=16字节)
+			data[offset + 8] = 0x02;  // TLV Type for IPv6
+			data[offset + 9] = 16;    // TLV Length
+			memcpy(data + offset + 10, link_nlri->link_addr.s6_addr, 16);
+			
+			// 写入 seq_num 和 spf_status
+			write_uint64_be(data + offset + 26, link_nlri->attr.seq_num);
+			data[offset + 34] = link_nlri->attr.spf_status;
 			idx++;
 		}
 

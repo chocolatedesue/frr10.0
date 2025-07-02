@@ -7,6 +7,7 @@
  */
 
 #include "tvr_spf.h"
+#include <netinet/in.h>
 #include <stdint.h>
 #include "zclient.h"
 #include "nexthop.h"
@@ -283,7 +284,7 @@ static void dijkstra(struct tvr_spf *spf, uint32_t src_node) {
     }
 
     node->dist = 0;
-    node->next_hop = 0;
+    node->next_hop = in6addr_any; // Set next hop to "any" for the source node
     pq_rb_add(pq, pq_elem_create(node));
 
     while(pq_rb_count(pq) > 0) {
@@ -316,6 +317,9 @@ static void dijkstra(struct tvr_spf *spf, uint32_t src_node) {
             );
             if(route->dist > node->dist) {
                 route->dist = node->dist;
+                if (node -> local_node == src_node) {
+                    route->next_hop = in6addr_loopback; // Set next hop to "any" for the source node
+                } else 
                 route->next_hop = node->next_hop;
             }
         }
@@ -341,9 +345,9 @@ static void dijkstra(struct tvr_spf *spf, uint32_t src_node) {
                     continue;
                 }
                 if(rnlink->remote_node == node->local_node) {
-                    if(memcmp(&rnlink->link_addr, &nlink->link_addr, 16) == 0) {
+                    // if(memcmp(&rnlink->link_addr, &nlink->link_addr, 16) == 0) {
                         bi_check = true;
-                    }
+                    // }
                 }
             }
             if(!bi_check) {
@@ -353,7 +357,7 @@ static void dijkstra(struct tvr_spf *spf, uint32_t src_node) {
             if(node->dist + nlink->igp_metric < rnode->dist) {
                 rnode->dist = node->dist + nlink->igp_metric;
                 if(node->local_node == src_node) {
-                    rnode->next_hop = rnode -> local_node ;
+                    rnode->next_hop = nlink->link_addr;
                 } else {
                     rnode->next_hop = node->next_hop;
                 }
@@ -453,6 +457,34 @@ static void tvr_route_to_zapi(struct tvr_route *tvr_route, uint32_t next_hop_nod
     }
 }
 
+/* Helper function to convert in6_addr to zapi format */
+static void tvr_route_v6_to_zapi(const struct prefix *prefix, const struct in6_addr *next_hop,
+                                 struct zapi_route *api, vrf_id_t vrf_id, uint8_t route_type) {
+    memset(api, 0, sizeof(*api));
+    api->vrf_id = vrf_id;
+    api->type = route_type;
+    api->safi = SAFI_UNICAST;
+    api->prefix = *prefix;
+    
+    // Create nexthop
+    struct zapi_nexthop *nexthop = &api->nexthops[0];
+    api->nexthop_num = 1;
+    
+    if (!IN6_IS_ADDR_UNSPECIFIED(next_hop)) {
+        SET_FLAG(api->message, ZAPI_MESSAGE_NEXTHOP);
+        nexthop->type = (prefix->family == AF_INET) ? NEXTHOP_TYPE_IPV4 : NEXTHOP_TYPE_IPV6;
+        
+        if (prefix->family == AF_INET) {
+            // Convert IPv6-mapped IPv4 to IPv4
+            if (IN6_IS_ADDR_V4MAPPED(next_hop)) {
+                memcpy(&nexthop->gate.ipv4, &next_hop->s6_addr[12], 4);
+            }
+        } else {
+            nexthop->gate.ipv6 = *next_hop;
+        }
+    }
+}
+
 int tvr_spf_install_routes(struct tvr_spf *spf, struct zclient *zclient, 
                           vrf_id_t vrf_id, uint8_t route_type) {
     if (spf == NULL || zclient == NULL) {
@@ -471,7 +503,12 @@ int tvr_spf_install_routes(struct tvr_spf *spf, struct zclient *zclient,
         }
         
         // 转换为zapi格式
-        tvr_route_to_zapi(route, route->next_hop, &api, vrf_id, route_type);
+        struct prefix prefix;
+        prefix.family = AF_INET6;
+        prefix.prefixlen = route->prefixlen;
+        prefix.u.prefix6 = route->prefix;
+        
+        tvr_route_v6_to_zapi(&prefix, &route->next_hop, &api, vrf_id, route_type);
         
         // 发送路由添加请求到zebra
         if (zclient_route_send(ZEBRA_ROUTE_ADD, zclient, &api) == ZCLIENT_SEND_SUCCESS) {
@@ -611,4 +648,30 @@ int tvr_spf_uninstall_route_from_string(struct zclient *zclient, const char *pre
     }
     
     return tvr_spf_uninstall_single_route(zclient, &prefix, vrf_id, route_type);
+}
+
+int tvr_spf_install_single_route_v6(struct zclient *zclient, const struct prefix *prefix, 
+                                    const struct in6_addr *next_hop, vrf_id_t vrf_id, 
+                                    uint8_t route_type, uint32_t metric) {
+    if (zclient == NULL || prefix == NULL || next_hop == NULL) {
+        return -1;
+    }
+    
+    struct zapi_route api;
+    
+    // 转换为zapi格式
+    tvr_route_v6_to_zapi(prefix, next_hop, &api, vrf_id, route_type);
+    
+    // 设置metric（如果提供）
+    if (metric != 0) {
+        SET_FLAG(api.message, ZAPI_MESSAGE_METRIC);
+        api.metric = metric;
+    }
+    
+    // 发送路由添加请求到zebra
+    if (zclient_route_send(ZEBRA_ROUTE_ADD, zclient, &api) == ZCLIENT_SEND_SUCCESS) {
+        return 1;
+    }
+    
+    return 0;
 }

@@ -282,7 +282,7 @@ static void tvr_show_node_nlri(struct tvr_db *db, struct vty *vty) {
 		inet_ntop(AF_INET, &nlri->local_node, local_node_ip_str, INET_ADDRSTRLEN);
 
 		vty_out(vty,
-			"  Node NLRI: [%12llu,%12llu],%12u,%12llu,%12s\n",
+			"  Node NLRI: [%12u,%12llu],%12u,%12llu,%12s\n",
 			nlri->local_node,
 			nlri->time_stamp,
 			nlri->attr.spf_status,
@@ -294,16 +294,16 @@ static void tvr_show_node_nlri(struct tvr_db *db, struct vty *vty) {
 
 static void tvr_show_link_nlri(struct tvr_db *db, struct vty *vty) {
 	struct tvr_link_nlri *nlri;
-	char str[PREFIX_STRLEN];
+	char link_addr_str[PREFIX_STRLEN];
 	bool is_first = true;
 
 	frr_each_safe(lnlri_rb, &db->lnlri_rb_root, nlri) {
-		inet_ntop(AF_INET6, &nlri->link_addr, str, PREFIX_STRLEN);
+		inet_ntop(AF_INET6, &nlri->link_addr, link_addr_str, PREFIX_STRLEN);
 		
 		if(is_first) {
  			vty_out(vty,
 			"\n"
-		    "             [%12s,%12s,%12s,%12s],%12s,%12s,%12s,%12s,%12s\n",
+		    "             [%12s,%12s,%46s,%12s],%12s,%12s,%12s,%12s,%12s\n",
 			"Local Node",
 			"Remote Node",
 			"Link Address",
@@ -322,10 +322,10 @@ static void tvr_show_link_nlri(struct tvr_db *db, struct vty *vty) {
 		inet_ntop(AF_INET, &nlri->remote_node, remote_node_ip_str, INET_ADDRSTRLEN);
 
 		vty_out(vty,
-			"  Link NLRI: [%12llu,%12llu,%12s,%12llu],%12u,%12u,%12llu,%12s,%12s\n",
+			"  Link NLRI: [%12u,%12u,%46s,%12llu],%12u,%12u,%12llu,%12s,%12s\n",
 			nlri->local_node,
 			nlri->remote_node,
-			str,
+			link_addr_str,
 			nlri->time_stamp,
 			nlri->attr.igp_metric,
 			nlri->attr.spf_status,

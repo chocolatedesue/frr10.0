@@ -7,6 +7,13 @@
 #ifndef _QUAGGA_BGP_FSM_H
 #define _QUAGGA_BGP_FSM_H
 
+
+#include <stdbool.h>
+#define TLV_TYPE_PEER_ADDR_IPV4  0x01
+#define TLV_TYPE_PEER_ADDR_IPV6  0x02
+
+#include <stddef.h>
+#include <stdint.h>
 enum bgp_fsm_state_progress {
 	BGP_FSM_FAILURE_AND_DELETE = -2,
 	BGP_FSM_FAILURE = -1,
@@ -138,6 +145,17 @@ extern void bgp_start_routeadv(struct bgp *);
  * instantly and updates should go out sooner.
  */
 extern void bgp_adjust_routeadv(struct peer *);
+
+
+
+// extern int encode_peer_address_tlv(uint8_t *buffer, size_t max_size, 
+//                                   const union sockunion *su, size_t *encoded_len);
+
+// extern int decode_peer_address_tlv(const uint8_t *buffer, size_t buffer_size,
+//                                   union sockunion *su, size_t *decoded_len);
+
+// extern size_t get_peer_address_tlv_size(const union sockunion *su);
+
 
 #include "hook.h"
 DECLARE_HOOK(peer_backward_transition, (struct peer *peer), (peer));

@@ -11,6 +11,7 @@
 #ifndef _FRR_TVR_SPF_H_
 #define _FRR_TVR_SPF_H_
 
+#include <netinet/in.h>
 #include <stdint.h>
 #include "typesafe.h"
 #include "prefix.h"
@@ -84,7 +85,7 @@ struct tvr_node {
     
     bool visited;
     uint64_t dist;
-    uint32_t next_hop;
+    struct in6_addr next_hop;
 
     struct list *prefixes;
     struct list *links;
@@ -107,7 +108,7 @@ struct tvr_route {
     struct in6_addr prefix;
 
     uint64_t dist;
-    uint32_t next_hop;
+    struct in6_addr next_hop;
 
     struct route_rb_item entry;
 };
@@ -147,6 +148,10 @@ extern int tvr_spf_uninstall_routes(struct tvr_spf *spf, struct zclient *zclient
 extern int tvr_spf_install_single_route(struct zclient *zclient, const struct prefix *prefix,
                                        uint32_t next_hop_node, vrf_id_t vrf_id,
                                        uint8_t route_type, uint32_t metric);
+
+extern int tvr_spf_install_single_route_v6(struct zclient *zclient, const struct prefix *prefix,
+                                          const struct in6_addr *next_hop, vrf_id_t vrf_id,
+                                          uint8_t route_type, uint32_t metric);
 
 extern int tvr_spf_uninstall_single_route(struct zclient *zclient, const struct prefix *prefix,
                                          vrf_id_t vrf_id, uint8_t route_type);

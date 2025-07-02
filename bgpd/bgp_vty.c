@@ -19965,14 +19965,14 @@ DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
 		prefix.u.prefix6 = route->prefix;
 		
 		if(route->dist < TVR_INF_DIST) {
-			char nexthop_str[INET_ADDRSTRLEN];
-			inet_ntop(AF_INET, &route->next_hop, nexthop_str,
+			char nexthop_str[INET6_ADDRSTRLEN];
+			inet_ntop(AF_INET6, &route->next_hop, nexthop_str,
 				  sizeof(nexthop_str));
 			
 			if (is_install_route && zclient && zclient->sock > 0) {
-				// 使用单条路由安装函数
-				int result = tvr_spf_install_single_route(zclient, &prefix, 
-							route->next_hop, VRF_DEFAULT, 
+				// 使用IPv6格式的单条路由安装函数
+				int result = tvr_spf_install_single_route_v6(zclient, &prefix, 
+							&route->next_hop, VRF_DEFAULT, 
 							ZEBRA_ROUTE_STATIC, (uint32_t)route->dist);
 				if (result > 0) {
 					installed_count++;
