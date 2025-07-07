@@ -80,11 +80,11 @@ uint64_t generate_simple_id(simple_id_generator_t* gen) {
     
     pthread_mutex_lock(&gen->mutex);
 
-    gen -> tmp_idx++;
+    // gen -> tmp_idx++;
     
-    pthread_mutex_unlock(&gen->mutex);
+    // pthread_mutex_unlock(&gen->mutex);
     
-    return gen -> tmp_idx;
+    // return gen -> tmp_idx;
     
     uint64_t timestamp = get_current_timestamp_ms();
     if (timestamp == 0) {

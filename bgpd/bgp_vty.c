@@ -19973,19 +19973,19 @@ DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
 				// 使用IPv6格式的单条路由安装函数
 				int result = tvr_spf_install_single_route_v6(zclient, &prefix, 
 							&route->next_hop, VRF_DEFAULT, 
-							ZEBRA_ROUTE_STATIC, (uint32_t)route->dist);
+							ZEBRA_ROUTE_STATIC, (uint32_t)route->dist, route -> ifindex);
 				if (result > 0) {
 					installed_count++;
-					vty_out(vty, "✓ Installed route %pFX with distance %llu, nexthop %s\n",
-						&prefix, route->dist, nexthop_str);
+					vty_out(vty, "✓ Installed route %pFX with distance %llu, nexthop %s, ifindex %d\n",
+						&prefix, route->dist, nexthop_str, route->ifindex);
 				} else {
 					failed_count++;
-					vty_out(vty, "✗ Failed to install route %pFX with distance %llu, nexthop %s\n",
-						&prefix, route->dist, nexthop_str);
+					vty_out(vty, "✗ Failed to install route %p,FX with distance %llu, nexthop %s, ifindex %d\n",
+						&prefix, route->dist, nexthop_str,route->ifindex);
 				}
 			} else {
-				vty_out(vty, "Route %pFX is reachable with distance %llu, nexthop %s\n",
-					&prefix, route->dist, nexthop_str);
+				vty_out(vty, "Route %pFX is reachable with distance %llu, nexthop %s, ifindex %d\n",
+					&prefix, route->dist, nexthop_str, route -> ifindex);
 			}
 		} else {
 			if (is_install_route) {

@@ -1302,21 +1302,42 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 		// tvr_db_process(peer->bgp->db, &local_node_nlri, false);
 		// tvr_db_process(peer->bgp->db, &remote_node_nlri, false);
 
+				struct in6_addr peer_addr_v6 = IN6ADDR_ANY_INIT;
+		if (peer -> connection->su.sa.sa_family == AF_INET) {
+			// IPv4映射到IPv6
+			memset(&peer_addr_v6, 0, sizeof(peer_addr_v6));
+			peer_addr_v6.s6_addr[10] = 0xff;
+			peer_addr_v6.s6_addr[11] = 0xff;
+			memcpy(&peer_addr_v6.s6_addr[12], &peer -> connection->su.sin.sin_addr, 4);
+		} else if (peer -> connection->su.sa.sa_family == AF_INET6) {
+			peer_addr_v6 = peer -> connection->su.sin6.sin6_addr;
+		}
+
+
 		struct tvr_nlri local_link_nlri;
 		local_link_nlri.type = LINK;
 		tvr_db_assign_link_nlri(
-			&local_link_nlri.u.link_nlri, src_router_id, dst_router_id, in6addr_any,
-			0, 1, 1, seq_id);
+			&local_link_nlri.u.link_nlri, src_router_id, dst_router_id, peer_addr_v6,
+			0, 1, 1, seq_id, peer -> ifp -> ifindex);
 		tvr_db_process(peer->bgp->db, &local_link_nlri, false);
 
 		// Phase 2: Prepare batch format for single NLRI (consistent with bgp_establish)
-		uint8_t data[25];
+		uint8_t data[8 + 39];
 		const uint64_t num = 1;
+		int offset = 8;
+
 		write_uint64_be(data, num); 
 		write_uint32_be(data + 8, src_router_id);
 		write_uint32_be(data + 12, dst_router_id);
-		write_uint64_be(data + 16, seq_id);
-		data[24] = 0x01;  // spf_status = 0 (disconnected)
+		
+		data[offset + 8] = 0x02; // TLV Type for IPv6
+		data[offset + 9]= 16;// TLV Length
+		memcpy(data + offset + 10, local_link_nlri.u.link_nlri.link_addr.s6_addr, 16);
+
+		write_uint64_be(data + offset + 26, seq_id);
+		data[34 + offset] = 0x01;  // spf_status = 0 (disconnected)
+		write_uint32_be ( data + offset + 35, peer -> ifp -> ifindex); 
+
 
 		// Phase 3: Traverse peers and send notifications
 		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
@@ -2400,7 +2421,7 @@ bgp_establish(struct peer_connection *connection)
 		
 		tvr_db_assign_link_nlri(
 			&local_link_nlri.u.link_nlri, src_router_id, dst_router_id, peer_addr_v6,
-			0, 1, 0, seq_id);
+			0, 1, 0, seq_id, peer->ifp->ifindex);
 		tvr_db_process(peer -> bgp -> db, &local_link_nlri, false);
 
 		
@@ -2410,13 +2431,13 @@ bgp_establish(struct peer_connection *connection)
 		const uint64_t link_nlri_len = lnlri_rb_count(&peer -> bgp -> db->lnlri_rb_root);
 
 		// 每个NLRI: 4(local_node) + 4(remote_node) + 18(TLV:2+16) + 8(seq_num) + 1(spf_status) = 35字节
-		uint8_t data[link_nlri_len * 35 + 8];
+		uint8_t data[link_nlri_len * 39 + 8];
 		write_uint64_be(data, link_nlri_len);
 
 		struct tvr_link_nlri *link_nlri;
 		int idx = 0;
 		frr_each_safe(lnlri_rb, &peer -> bgp -> db->lnlri_rb_root, link_nlri) {
-			size_t offset = 8 + idx * 35;
+			size_t offset = 8 + idx * 39;
 			
 			// 写入 local_node 和 remote_node
 			write_uint32_be(data + offset, link_nlri->local_node);
@@ -2430,6 +2451,7 @@ bgp_establish(struct peer_connection *connection)
 			// 写入 seq_num 和 spf_status
 			write_uint64_be(data + offset + 26, link_nlri->attr.seq_num);
 			data[offset + 34] = link_nlri->attr.spf_status;
+			write_uint32_be( data + offset + 35, peer -> ifp ->ifindex);
 			idx++;
 		}
 

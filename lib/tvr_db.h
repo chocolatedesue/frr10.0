@@ -76,6 +76,7 @@ struct tvr_link_nlri {
         uint8_t spf_status;
         uint64_t seq_num;
     } attr;
+    ifindex_t ifindex;
     
     struct lnlri_rb_item entry;
 };
@@ -191,7 +192,7 @@ extern bool tvr_db_assign_node_nlri(struct tvr_node_nlri* nlri, uint64_t local_n
 extern bool tvr_db_assign_link_nlri(struct tvr_link_nlri* nlri, uint64_t local_node,
 					uint64_t remote_node, struct in6_addr link_addr,
 					uint64_t time_stamp, uint32_t igp_metric,
-					uint8_t spf_status, uint64_t seq_num) ;
+					uint8_t spf_status, uint64_t seq_num, ifindex_t ifindex) ;
 
 #ifdef __cplusplus
 }

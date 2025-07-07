@@ -3862,6 +3862,8 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		}
 		seq_num = stream_getq(s);
 		spf_status = stream_getc(s);
+		ifindex_t ifindex = stream_getl(s);
+		
 
 		// 创建用于查找的 Link NLRI
 		struct tvr_nlri rec_link_nlri;
@@ -3877,7 +3879,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 				
 		tvr_db_assign_link_nlri(
 			&rec_link_nlri.u.link_nlri, local_node, remote_node, peer_addr_v6,
-			0, 1, spf_status, seq_num);
+			0, 1, spf_status, seq_num, ifindex);
 		
 		// 查找数据库中是否存在相同的 NLRI
 		struct tvr_link_nlri* pre_link_nlri = lnlri_rb_find(
@@ -3978,13 +3980,13 @@ int bgp_link_state_receive(struct peer_connection *connection,
 
 			// 转发原始数据包
 			// 重新创建数据包内容进行转发 (新格式: 35字节每个NLRI)
-			uint8_t forward_data[8 + link_nlri_count * 35];
+			uint8_t forward_data[8 + link_nlri_count * 39];
 			write_uint64_be(forward_data, link_nlri_count);
 			
 			// 重新读取并复制所有 NLRI 数据
 			stream_set_getp(s, data_start_pos + 8); // 重新定位到第一个 NLRI
 			for (uint64_t i = 0; i < link_nlri_count; i++) {
-				size_t offset = 8 + i * 35;
+				size_t offset = 8 + i * 39;
 				
 				uint32_t local_node = stream_getl(s);
 				uint32_t remote_node = stream_getl(s);
@@ -3997,6 +3999,8 @@ int bgp_link_state_receive(struct peer_connection *connection,
 				
 				uint64_t seq_num = stream_getq(s);
 				uint8_t spf_status = stream_getc(s);
+
+				ifindex_t ifindex = stream_getl(s);
 				
 				// 写入转发数据
 				write_uint32_be(forward_data + offset, local_node);
@@ -4009,6 +4013,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 				
 				write_uint64_be(forward_data + offset + 26, seq_num);
 				forward_data[offset + 34] = spf_status;
+				write_uint32_be(forward_data + offset + 35, ifindex);
 			}
 
 			bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, forward_data, sizeof(forward_data));

@@ -65,6 +65,7 @@ struct tvr_nlink {
 
     uint32_t igp_metric;
     uint8_t spf_status;
+    ifindex_t ifindex;
 };
 
 macro_inline int tvr_nlink_cmp(const struct tvr_nlink *lhs,
@@ -86,6 +87,8 @@ struct tvr_node {
     bool visited;
     uint64_t dist;
     struct in6_addr next_hop;
+    ifindex_t ifindex;
+
 
     struct list *prefixes;
     struct list *links;
@@ -109,6 +112,7 @@ struct tvr_route {
 
     uint64_t dist;
     struct in6_addr next_hop;
+    ifindex_t ifindex;
 
     struct route_rb_item entry;
 };
@@ -138,8 +142,8 @@ extern void tvr_spf_destroy(struct tvr_spf **spf);
 struct zclient;
 
 /* Route installation/uninstallation functions */
-extern int tvr_spf_install_routes(struct tvr_spf *spf, struct zclient *zclient, 
-                                 vrf_id_t vrf_id, uint8_t route_type);
+// extern int tvr_spf_install_routes(struct tvr_spf *spf, struct zclient *zclient, 
+//                                  vrf_id_t vrf_id, uint8_t route_type);
 
 extern int tvr_spf_uninstall_routes(struct tvr_spf *spf, struct zclient *zclient, 
                                    vrf_id_t vrf_id, uint8_t route_type);
@@ -151,7 +155,7 @@ extern int tvr_spf_install_single_route(struct zclient *zclient, const struct pr
 
 extern int tvr_spf_install_single_route_v6(struct zclient *zclient, const struct prefix *prefix,
                                           const struct in6_addr *next_hop, vrf_id_t vrf_id,
-                                          uint8_t route_type, uint32_t metric);
+                                          uint8_t route_type, uint32_t metric, ifindex_t ifindex);
 
 extern int tvr_spf_uninstall_single_route(struct zclient *zclient, const struct prefix *prefix,
                                          vrf_id_t vrf_id, uint8_t route_type);

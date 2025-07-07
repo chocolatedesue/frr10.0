@@ -303,7 +303,7 @@ static void tvr_show_link_nlri(struct tvr_db *db, struct vty *vty) {
 		if(is_first) {
  			vty_out(vty,
 			"\n"
-		    "             [%12s,%12s,%46s,%12s],%12s,%12s,%12s,%12s,%12s\n",
+		    "             [%12s,%12s,%25s,%12s],%12s,%12s,%12s,%12s,%12s\n",
 			"Local Node",
 			"Remote Node",
 			"Link Address",
@@ -322,7 +322,7 @@ static void tvr_show_link_nlri(struct tvr_db *db, struct vty *vty) {
 		inet_ntop(AF_INET, &nlri->remote_node, remote_node_ip_str, INET_ADDRSTRLEN);
 
 		vty_out(vty,
-			"  Link NLRI: [%12u,%12u,%46s,%12llu],%12u,%12u,%12llu,%12s,%12s\n",
+			"  Link NLRI: [%12u,%12u,%25s,%12llu],%12u,%12u,%12llu,%12s,%12s\n",
 			nlri->local_node,
 			nlri->remote_node,
 			link_addr_str,
@@ -408,7 +408,7 @@ bool tvr_db_assign_node_nlri(struct tvr_node_nlri* nlri, uint64_t local_node,
 bool tvr_db_assign_link_nlri(struct tvr_link_nlri* nlri, uint64_t local_node,
 					uint64_t remote_node, struct in6_addr link_addr,
 					uint64_t time_stamp, uint32_t igp_metric,
-					uint8_t spf_status, uint64_t seq_num) 
+					uint8_t spf_status, uint64_t seq_num, ifindex_t ifindex) 
 {
 	if (nlri == NULL) {
 		return false;
@@ -421,6 +421,7 @@ bool tvr_db_assign_link_nlri(struct tvr_link_nlri* nlri, uint64_t local_node,
 	nlri->attr.igp_metric = igp_metric;
 	nlri->attr.spf_status = spf_status;
 	nlri->attr.seq_num = seq_num;
+	nlri->ifindex = ifindex;
 
 	return true;							
 }

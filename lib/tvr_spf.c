@@ -27,6 +27,7 @@ static struct tvr_nlink *tvr_nlink_create(struct tvr_link_nlri *nlri) {
 
     nlink->igp_metric = nlri->attr.igp_metric;
     nlink->spf_status = nlri->attr.spf_status;
+    nlink -> ifindex = nlri -> ifindex;
 
     return nlink;
 }
@@ -319,8 +320,11 @@ static void dijkstra(struct tvr_spf *spf, uint32_t src_node) {
                 route->dist = node->dist;
                 if (node -> local_node == src_node) {
                     route->next_hop = in6addr_loopback; // Set next hop to "any" for the source node
-                } else 
-                route->next_hop = node->next_hop;
+                    route -> ifindex = 1;
+                } else {
+                    route -> next_hop = node->next_hop;
+                    route -> ifindex = node -> ifindex;
+                }
             }
         }
         if(node->spf_status == TVR_NOTRANS_STATUS) {
@@ -358,8 +362,10 @@ static void dijkstra(struct tvr_spf *spf, uint32_t src_node) {
                 rnode->dist = node->dist + nlink->igp_metric;
                 if(node->local_node == src_node) {
                     rnode->next_hop = nlink->link_addr;
+                    rnode -> ifindex = nlink->ifindex;
                 } else {
                     rnode->next_hop = node->next_hop;
+                    rnode -> ifindex = node -> ifindex;
                 }
                 // rnode -> next_hop = node->next_hop;
                 pq_rb_add(pq, pq_elem_create(rnode));
@@ -459,7 +465,7 @@ static void tvr_route_to_zapi(struct tvr_route *tvr_route, uint32_t next_hop_nod
 
 /* Helper function to convert in6_addr to zapi format */
 static void tvr_route_v6_to_zapi(const struct prefix *prefix, const struct in6_addr *next_hop,
-                                 struct zapi_route *api, vrf_id_t vrf_id, uint8_t route_type) {
+                                 struct zapi_route *api, vrf_id_t vrf_id, uint8_t route_type, const ifindex_t ifindex) {
     memset(api, 0, sizeof(*api));
     api->vrf_id = vrf_id;
     api->type = route_type;
@@ -472,7 +478,7 @@ static void tvr_route_v6_to_zapi(const struct prefix *prefix, const struct in6_a
     
     if (!IN6_IS_ADDR_UNSPECIFIED(next_hop)) {
         SET_FLAG(api->message, ZAPI_MESSAGE_NEXTHOP);
-        nexthop->type = (prefix->family == AF_INET) ? NEXTHOP_TYPE_IPV4 : NEXTHOP_TYPE_IPV6;
+        nexthop->type = (prefix->family == AF_INET) ? NEXTHOP_TYPE_IPV4_IFINDEX : NEXTHOP_TYPE_IPV6_IFINDEX;
         
         if (prefix->family == AF_INET) {
             // Convert IPv6-mapped IPv4 to IPv4
@@ -482,42 +488,43 @@ static void tvr_route_v6_to_zapi(const struct prefix *prefix, const struct in6_a
         } else {
             nexthop->gate.ipv6 = *next_hop;
         }
+        nexthop -> ifindex = ifindex;
     }
 }
 
-int tvr_spf_install_routes(struct tvr_spf *spf, struct zclient *zclient, 
-                          vrf_id_t vrf_id, uint8_t route_type) {
-    if (spf == NULL || zclient == NULL) {
-        return -1;
-    }
+// int tvr_spf_install_routes(struct tvr_spf *spf, struct zclient *zclient, 
+//                           vrf_id_t vrf_id, uint8_t route_type) {
+//     if (spf == NULL || zclient == NULL) {
+//         return -1;
+//     }
     
-    struct tvr_route *route;
-    struct zapi_route api;
-    int installed = 0;
+//     struct tvr_route *route;
+//     struct zapi_route api;
+//     int installed = 0;
     
-    // 遍历所有计算出的路由
-    frr_each(route_rb, &spf->route_rb_root, route) {
-        // 跳过无法到达的路由
-        if (route->dist == TVR_INF_DIST) {
-            continue;
-        }
+//     // 遍历所有计算出的路由
+//     frr_each(route_rb, &spf->route_rb_root, route) {
+//         // 跳过无法到达的路由
+//         if (route->dist == TVR_INF_DIST) {
+//             continue;
+//         }
         
-        // 转换为zapi格式
-        struct prefix prefix;
-        prefix.family = AF_INET6;
-        prefix.prefixlen = route->prefixlen;
-        prefix.u.prefix6 = route->prefix;
+//         // 转换为zapi格式
+//         struct prefix prefix;
+//         prefix.family = AF_INET6;
+//         prefix.prefixlen = route->prefixlen;
+//         prefix.u.prefix6 = route->prefix;
         
-        tvr_route_v6_to_zapi(&prefix, &route->next_hop, &api, vrf_id, route_type);
+//         tvr_route_v6_to_zapi(&prefix, &route->next_hop, &api, vrf_id, route_type);
         
-        // 发送路由添加请求到zebra
-        if (zclient_route_send(ZEBRA_ROUTE_ADD, zclient, &api) == ZCLIENT_SEND_SUCCESS) {
-            installed++;
-        }
-    }
+//         // 发送路由添加请求到zebra
+//         if (zclient_route_send(ZEBRA_ROUTE_ADD, zclient, &api) == ZCLIENT_SEND_SUCCESS) {
+//             installed++;
+//         }
+//     }
     
-    return installed;
-}
+//     return installed;
+// }
 
 int tvr_spf_uninstall_routes(struct tvr_spf *spf, struct zclient *zclient, 
                             vrf_id_t vrf_id, uint8_t route_type) {
@@ -652,7 +659,7 @@ int tvr_spf_uninstall_route_from_string(struct zclient *zclient, const char *pre
 
 int tvr_spf_install_single_route_v6(struct zclient *zclient, const struct prefix *prefix, 
                                     const struct in6_addr *next_hop, vrf_id_t vrf_id, 
-                                    uint8_t route_type, uint32_t metric) {
+                                    uint8_t route_type, uint32_t metric, const ifindex_t ifindex) {
     if (zclient == NULL || prefix == NULL || next_hop == NULL) {
         return -1;
     }
@@ -660,7 +667,7 @@ int tvr_spf_install_single_route_v6(struct zclient *zclient, const struct prefix
     struct zapi_route api;
     
     // 转换为zapi格式
-    tvr_route_v6_to_zapi(prefix, next_hop, &api, vrf_id, route_type);
+    tvr_route_v6_to_zapi(prefix, next_hop, &api, vrf_id, route_type, ifindex);
     
     // 设置metric（如果提供）
     if (metric != 0) {
