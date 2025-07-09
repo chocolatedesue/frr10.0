@@ -75,7 +75,7 @@ RUN cd /src \
         --enable-multipath=256 \
         --enable-numeric-version \
         --with-pkg-extra-version="_git$PKGVER" \
-    && make dist
+    && make -j$(nproc) dist
 
 # =============================================================================
 # FRR APK Builder Stage
