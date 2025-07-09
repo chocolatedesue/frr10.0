@@ -1,81 +1,134 @@
 # syntax=docker/dockerfile:1
 
-# Create a basic stage set up to build APKs
-FROM alpine:3.19 as alpine-builder
-RUN apk add \
-		--update-cache \
-		abuild \
-		alpine-conf \
-		alpine-sdk \
-	&& setup-apkcache /var/cache/apk \
-	&& mkdir -p /pkgs/apk \
-	&& echo 'builder ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
-RUN adduser -D -G abuild builder && su builder -c 'abuild-keygen -a -n'
+# =============================================================================
+# Base Alpine Builder Stage
+# Sets up the basic environment for building APK packages
+# =============================================================================
+FROM alpine:3.20 AS alpine-builder
 
-# This stage builds an APK for libyang
-FROM alpine-builder as alpine-apk-builder-libyang
+# Install build dependencies and configure system
+RUN apk add \
+    --update-cache \
+    abuild \
+    alpine-conf \
+    alpine-sdk \
+    doas \
+    && setup-apkcache /var/cache/apk \
+    && mkdir -p /pkgs/apk \
+    && echo 'builder ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers \
+    && echo 'permit nopass builder' >> /etc/doas.d/doas.conf
+
+# Create builder user and generate signing keys
+RUN adduser -D -G abuild builder
+
+# Generate and install signing keys automatically
+RUN su builder -c 'abuild-keygen -a -i -n'
+
+# =============================================================================
+# libyang APK Builder Stage
+# Builds the libyang library as a dependency for FRR
+# =============================================================================
+FROM alpine-builder AS libyang-builder
+
+# Set up libyang source
 RUN mkdir -p /src/libyang
 COPY docker/alpine/libyang/APKBUILD /src/libyang
 RUN chown -R builder /pkgs /src
+
+# Build libyang APK
 USER builder
 RUN cd /src/libyang \
-	&& abuild checksum \
-	&& git init \
-	&& abuild -r -P /pkgs/apk
+    && abuild checksum \
+    && git init \
+    && abuild -r -P /pkgs/apk -K
 
-# This stage builds a dist tarball from the source
-FROM alpine:3.19 as source-builder
+# =============================================================================
+# FRR Source Distribution Builder Stage
+# Creates the FRR source distribution tarball
+# =============================================================================
+FROM alpine:3.20 AS source-builder
+
+# Prepare directories
 RUN mkdir -p /src/alpine /pkgs/apk
+
+# Copy APKBUILD template and libyang packages
 COPY alpine/APKBUILD.in /src/alpine
-COPY --from=alpine-apk-builder-libyang /pkgs/apk/src /pkgs/apk
+COPY --from=libyang-builder /pkgs/apk/src /pkgs/apk
+
+# Install libyang packages
 RUN cd /pkgs/apk && apk add --allow-untrusted */*.apk
+
+# Install build dependencies
 RUN source /src/alpine/APKBUILD.in \
-	&& apk add \
-		--no-cache \
-		--update-cache \
-		$makedepends
+    && apk add \
+        --no-cache \
+        --update-cache \
+        $makedepends
+
+# Copy source code and build distribution
 COPY . /src
 ARG PKGVER
-RUN cd /src \
-	&& ./bootstrap.sh \
-	&& ./configure \
-		--enable-numeric-version \
-		--with-pkg-extra-version="_git$PKGVER" \
-	&& make dist
 
-# This stage builds an APK from the dist tarball
-FROM alpine-builder as alpine-apk-builder
+RUN cd /src \
+    && ./bootstrap.sh \
+    && ./configure \
+        --enable-multipath=256 \
+        --enable-numeric-version \
+        --with-pkg-extra-version="_git$PKGVER" \
+    && make dist
+
+# =============================================================================
+# FRR APK Builder Stage
+# Builds the FRR APK from the source distribution
+# =============================================================================
+FROM alpine-builder AS frr-builder
+
+# Copy source distribution and dependencies
 COPY --from=source-builder /src/frr-*.tar.gz /src/alpine/* /dist/
-COPY --from=alpine-apk-builder-libyang /pkgs/apk/src /pkgs/apk
+COPY --from=libyang-builder /pkgs/apk/src /pkgs/apk
+
+# Install libyang packages and clean up indices
 RUN cd /pkgs/apk && apk add --allow-untrusted */*.apk
 RUN find /pkgs/apk -type f -name APKINDEX.tar.gz -delete
+
+# Set up permissions
 RUN chown -R builder /dist /pkgs
+
+# Build FRR APK
 USER builder
 RUN cd /dist \
-	&& abuild checksum \
-	&& git init \
-	&& abuild -r -P /pkgs/apk
+    && abuild checksum \
+    && git init \
+    && abuild -r -P /pkgs/apk -K
 
-# This stage installs frr from the apk
-FROM alpine:3.19
-RUN mkdir -p /pkgs/apk
-COPY --from=alpine-apk-builder /pkgs/apk/ /pkgs/apk/
+# =============================================================================
+# Final Runtime Stage
+# Creates the final FRR runtime image
+# =============================================================================
+FROM alpine:3.20
+
+# Install runtime dependencies
 RUN apk add \
-		--no-cache \
-		--update-cache \
-		tini \
-	&& apk add \
-		--no-cache \
-		--allow-untrusted /pkgs/apk/*/*.apk \
-	&& rm -rf /pkgs
+    --no-cache \
+    --update-cache \
+    tini
 
-# Own the config / PID files
-RUN mkdir -p /var/run/frr
-RUN chown -R frr:frr /etc/frr /var/run/frr
+# Copy and install FRR packages
+RUN mkdir -p /pkgs/apk
+COPY --from=frr-builder /pkgs/apk/ /pkgs/apk/
+RUN apk add \
+    --no-cache \
+    --allow-untrusted \
+    /pkgs/apk/*/*.apk \
+    && rm -rf /pkgs
 
-# Simple init manager for reaping processes and forwarding signals
-ENTRYPOINT ["/sbin/tini", "--"]
+# Set up FRR runtime environment
+RUN mkdir -p /var/run/frr \
+    && chown -R frr:frr /etc/frr /var/run/frr
 
-# Default CMD starts watchfrr
+# Copy startup script
 COPY docker/alpine/docker-start /usr/lib/frr/docker-start
+
+# Configure container runtime
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["/usr/lib/frr/docker-start"]
