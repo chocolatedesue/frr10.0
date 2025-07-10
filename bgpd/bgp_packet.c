@@ -4390,7 +4390,7 @@ void bgp_link_state_send(struct peer_connection *connection,
 
     frr_mutex_lock_autounlock(&connection->io_mtx);
     // 1. 创建数据包
-    s = stream_new(BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE);
+    s = stream_new(BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE + data_len);
 
     // 2. 设置BGP头部（marker + 长度占位符 + 类型）
     bgp_packet_set_marker(s, msg_type);
