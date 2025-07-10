@@ -9,6 +9,7 @@
 #include <netinet/in.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <zebra.h>
 #include <sys/time.h>
 
@@ -3947,7 +3948,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		 local_router_id_str, remote_router_id_str, (unsigned long long)link_nlri_count, 
 		 first_local_node_str, first_remote_node_str, first_spf_status, flag);
 		 write(fp1, debug_buf, strlen(debug_buf));
-		 close(fp1);
+
 	} else {
 
 		// struct tvr_spf *spf  = tvr_spf_create(peer -> bgp->db, peer -> bgp -> router_id.s_addr , 0, 0);
@@ -3960,7 +3961,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		first_local_node_str, first_remote_node_str, first_spf_status);
 
 		write(fp1, debug_buf, strlen(debug_buf));
-		close(fp1);
+		
 
 		struct listnode *node, *nnode;
 		struct peer *tmp_peer;
@@ -3979,6 +3980,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 			 local_router_id_str, tmp_peer_router_id_str, (unsigned long long)link_nlri_count,
 			 first_local_node_str, first_remote_node_str, first_spf_status);
 			write(fp1, tmp_buf, strlen(tmp_buf));
+
 
 			// 转发原始数据包
 			// 重新创建数据包内容进行转发 (新格式: 35字节每个NLRI)
@@ -4020,7 +4022,10 @@ int bgp_link_state_receive(struct peer_connection *connection,
 
 			bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, forward_data, sizeof(forward_data));
 		}
+		// close(fp1);
 	}
+
+	close(fp1);
 
 	
 	return BGP_PACKET_NOOP;
@@ -4160,16 +4165,16 @@ void bgp_process_packet(struct event *thread)
 					__func__, peer->host);
 			break;
 		case BGP_MSG_LINK_STATE:
-			// frrtrace(2, frr_bgp, refresh_process, peer, size);
-			// atomic_fetch_add_explicit(&peer->link_state_in, 1,
-			// 			  memory_order_relaxed);
-			// mprc = bgp_link_state_receive(connection, peer, size);
-			// if (mprc == BGP_Stop)
-			// 	flog_err(
-			// 		EC_BGP_LINK_STATE_RCV,
-			// 		"%s: BGP LINK STATE receipt failed for peer: %s",
-			// 		__func__, peer->host);
-			mprc = BGP_PACKET_NOOP;
+			frrtrace(2, frr_bgp, refresh_process, peer, size);
+			atomic_fetch_add_explicit(&peer->link_state_in, 1,
+						  memory_order_relaxed);
+			mprc = bgp_link_state_receive(connection, peer, size);
+			if (mprc == BGP_Stop)
+				flog_err(
+					EC_BGP_LINK_STATE_RCV,
+					"%s: BGP LINK STATE receipt failed for peer: %s",
+					__func__, peer->host);
+			// mprc = BGP_PACKET_NOOP;
 			break;
 		default:
 			/* Suppress uninitialized variable warning */
