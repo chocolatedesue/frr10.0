@@ -3933,7 +3933,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 	inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, local_router_id_str, INET_ADDRSTRLEN);
 	inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_router_id_str, INET_ADDRSTRLEN);
 	
-	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND );
 	
 	// 检查是否有任何一个 NLRI 是从本地路由器发起的，或者没有新的 NLRI
 	bool is_self_originated = false;
@@ -3947,6 +3947,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		 local_router_id_str, remote_router_id_str, (unsigned long long)link_nlri_count, 
 		 first_local_node_str, first_remote_node_str, first_spf_status, flag);
 		 write(fp1, debug_buf, strlen(debug_buf));
+		 close(fp1);
 	} else {
 
 		// struct tvr_spf *spf  = tvr_spf_create(peer -> bgp->db, peer -> bgp -> router_id.s_addr , 0, 0);
@@ -3959,6 +3960,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		first_local_node_str, first_remote_node_str, first_spf_status);
 
 		write(fp1, debug_buf, strlen(debug_buf));
+		close(fp1);
 
 		struct listnode *node, *nnode;
 		struct peer *tmp_peer;
@@ -4020,7 +4022,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		}
 	}
 
-	close(fp1);
+	
 	return BGP_PACKET_NOOP;
 
 }
@@ -4158,16 +4160,16 @@ void bgp_process_packet(struct event *thread)
 					__func__, peer->host);
 			break;
 		case BGP_MSG_LINK_STATE:
-			frrtrace(2, frr_bgp, refresh_process, peer, size);
-			atomic_fetch_add_explicit(&peer->link_state_in, 1,
-						  memory_order_relaxed);
-			mprc = bgp_link_state_receive(connection, peer, size);
-			if (mprc == BGP_Stop)
-				flog_err(
-					EC_BGP_LINK_STATE_RCV,
-					"%s: BGP LINK STATE receipt failed for peer: %s",
-					__func__, peer->host);
-			// mprc = BGP_PACKET_NOOP;
+			// frrtrace(2, frr_bgp, refresh_process, peer, size);
+			// atomic_fetch_add_explicit(&peer->link_state_in, 1,
+			// 			  memory_order_relaxed);
+			// mprc = bgp_link_state_receive(connection, peer, size);
+			// if (mprc == BGP_Stop)
+			// 	flog_err(
+			// 		EC_BGP_LINK_STATE_RCV,
+			// 		"%s: BGP LINK STATE receipt failed for peer: %s",
+			// 		__func__, peer->host);
+			mprc = BGP_PACKET_NOOP;
 			break;
 		default:
 			/* Suppress uninitialized variable warning */
@@ -4304,7 +4306,7 @@ static void bgp_write_customize(struct peer_connection *connection,
 	// snprintf(debug_buf, sizeof(debug_buf),
 	// 	 "customize write success, type %d\n",
 	// 	 type);
-	// int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	// int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND );
 	// int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
 	// close(fp1);
 
@@ -4376,7 +4378,7 @@ void bgp_link_state_send(struct peer_connection *connection,
 		 "[%s] send_custom_bgp_data to [%s], msg_type: %s, data_len: %zu\n",
 		 src_router_id_str, dst_router_id_str,
 		  type_str, data_len);
-	int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND );
 	write(fp1, debug_buf, strlen(debug_buf));
 	close(fp1);
 

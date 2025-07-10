@@ -137,7 +137,9 @@ RUN apk add \
 
 # Set up FRR runtime environment
 RUN mkdir -p /var/run/frr \
-    && chown -R frr:frr /etc/frr /var/run/frr
+    && chown -R frr:frr /etc/frr /var/run/frr \
+    && apk add iperf3 --no-cache --update-cache 
+
 
 # Copy startup script
 COPY docker/alpine/docker-start /usr/lib/frr/docker-start

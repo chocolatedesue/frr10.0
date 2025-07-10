@@ -1338,7 +1338,7 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 		data[34 + offset] = 0x01;  // spf_status = 0 (disconnected)
 		write_uint32_be ( data + offset + 35, peer -> ifp -> ifindex); 
 
-		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND );
 
 		// Phase 3: Traverse peers and send notifications
 		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
@@ -2382,7 +2382,7 @@ bgp_establish(struct peer_connection *connection)
 		char bgp_router_id_str[INET_ADDRSTRLEN];
 		inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
 			  bgp_router_id_str, sizeof(bgp_router_id_str));
-		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		
 
 
 		// struct tvr_nlri nlri;
@@ -2457,6 +2457,8 @@ bgp_establish(struct peer_connection *connection)
 			idx++;
 		}
 
+		int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND );
+
 
 		/* Iterate through all peers in the BGP instance */
 		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
@@ -2488,7 +2490,8 @@ bgp_establish(struct peer_connection *connection)
 				
 			}
 		}
-			close(fp1);
+		close(fp1);
+			
 		
 	}
 	if (peer->doppelganger &&
