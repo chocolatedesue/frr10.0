@@ -64,6 +64,9 @@ RUN source /src/alpine/APKBUILD.in \
         --no-cache \
         --update-cache \
         $makedepends
+	
+
+# RUN apk add  --no-cache  --update-cache sqlite
 
 # Copy source code and build distribution
 COPY . /src
@@ -71,10 +74,20 @@ ARG PKGVER
 
 RUN cd /src \
     && ./bootstrap.sh \
-    && ./configure \
-        --enable-multipath=256 \
-        --enable-numeric-version \
-        --with-pkg-extra-version="_git$PKGVER" \
+    &&   ./configure \
+                --prefix=/usr \
+                --sysconfdir=/etc \
+                --localstatedir=/var \
+                --sbindir=/usr/lib/frr \
+                --enable-sharpd \
+                --enable-multipath=64 \
+                --enable-user=frr \
+                --enable-group=frr \
+                --enable-vty-group=frrvty \
+                --enable-snmp=agentx \
+                --enable-scripting \
+                --enable-numeric-version \
+				--with-pkg-extra-version="_git$PKGVER" \
     && make -j$(nproc) dist
 
 # =============================================================================

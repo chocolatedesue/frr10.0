@@ -30,11 +30,11 @@ docker build \
 	--pull \
 	--file=docker/alpine/Dockerfile \
 	--build-arg="PKGVER=$PKGVER" \
-	--tag="frr:alpine-apk-builder-$GITREV" \
-	--target=alpine-apk-builder \
+	--tag="frr:alpine-builder-$GITREV" \
+	--target=alpine-builder \
 	.
 
-CONTAINER_ID="$(docker create "frr:alpine-apk-builder-$GITREV")"
+CONTAINER_ID="$(docker create "frr:alpine-builder-$GITREV")"
 docker cp "${CONTAINER_ID}:/pkgs/" docker/alpine
 docker rm "${CONTAINER_ID}"
 
@@ -45,4 +45,4 @@ docker build \
 	.
 
 docker rmi "frr:alpine-builder-$GITREV"
-docker rmi "frr:alpine-apk-builder-$GITREV"
+docker rmi "frr:alpine-builder-$GITREV"

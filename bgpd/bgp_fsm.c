@@ -1338,6 +1338,7 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 		data[34 + offset] = 0x01;  // spf_status = 0 (disconnected)
 		write_uint32_be ( data + offset + 35, peer -> ifp -> ifindex); 
 
+		int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 
 		// Phase 3: Traverse peers and send notifications
 		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
@@ -1361,17 +1362,18 @@ void bgp_fsm_change_status(struct peer_connection *connection,
         "remote_id_str: %s, seq_id %llu\n",
 			bgp_router_id_str, bgp_final_remote_id_str, remote_is_str, seq_id);
 
-				int fp1 = open("/home/frr/test/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 				if (fp1 != -1) {
 					ssize_t bytes_written = write(fp1, debug_buf, strlen(debug_buf));
 					(void)bytes_written;
-					close(fp1);
+					
 				}
 
 				
 				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof data);
 			}
 		}
+
+		close(fp1);
 	}	
 
 	/* Save event that caused status change. */

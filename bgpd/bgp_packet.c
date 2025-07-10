@@ -4167,6 +4167,7 @@ void bgp_process_packet(struct event *thread)
 					EC_BGP_LINK_STATE_RCV,
 					"%s: BGP LINK STATE receipt failed for peer: %s",
 					__func__, peer->host);
+			// mprc = BGP_PACKET_NOOP;
 			break;
 		default:
 			/* Suppress uninitialized variable warning */
