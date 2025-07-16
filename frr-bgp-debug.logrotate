@@ -1,0 +1,59 @@
+# FRR BGP 日志轮转配置
+# 文件路径: /etc/logrotate.d/frr-bgp-debug
+# 用于管理 BGP 调试日志文件的轮转和压缩
+
+/var/log/frr/bgpd.log {
+    daily
+    missingok
+    rotate 30
+    compress
+    delaycompress
+    notifempty
+    create 640 frr frr
+    postrotate
+        # 重新加载 FRR 服务以使用新的日志文件
+        systemctl reload frr > /dev/null 2>&1 || true
+    endscript
+}
+
+/var/log/frr/bgp-all.dump {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 640 frr frr
+    postrotate
+        # 重启 BGP 转储功能
+        vtysh -c "configure terminal" -c "no dump bgp all" -c "dump bgp all /var/log/frr/bgp-all.dump 300" > /dev/null 2>&1 || true
+    endscript
+}
+
+/var/log/frr/bgp-updates.dump {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 640 frr frr
+    postrotate
+        # 重启 BGP 更新转储功能
+        vtysh -c "configure terminal" -c "no dump bgp updates" -c "dump bgp updates /var/log/frr/bgp-updates.dump 300" > /dev/null 2>&1 || true
+    endscript
+}
+
+/var/log/frr/bgp-routes.mrt {
+    weekly
+    missingok
+    rotate 4
+    compress
+    delaycompress
+    notifempty
+    create 640 frr frr
+    postrotate
+        # 重启 BGP 路由转储功能
+        vtysh -c "configure terminal" -c "no dump bgp routes-mrt" -c "dump bgp routes-mrt /var/log/frr/bgp-routes.mrt 3600" > /dev/null 2>&1 || true
+    endscript
+}

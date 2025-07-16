@@ -1338,7 +1338,7 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 		data[34 + offset] = 0x01;  // spf_status = 0 (disconnected)
 		write_uint32_be ( data + offset + 35, peer -> ifp -> ifindex); 
 
-		int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND );
+		int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND , 0666);
 
 		// Phase 3: Traverse peers and send notifications
 		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
@@ -2457,7 +2457,7 @@ bgp_establish(struct peer_connection *connection)
 			idx++;
 		}
 
-		int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND );
+		int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND,0666 );
 
 
 		/* Iterate through all peers in the BGP instance */
@@ -2486,7 +2486,39 @@ bgp_establish(struct peer_connection *connection)
 					write(fp1, debug_buf, strlen(debug_buf));
 				}
 
-				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof data);
+				// 分批发送link_state消息，每批最多60个
+				const uint64_t MAX_BATCH_SIZE = 60;
+				uint64_t remaining_count = link_nlri_len;
+				uint64_t current_batch_start = 0;
+				
+				while (remaining_count > 0) {
+					// 计算当前批次的大小
+					uint64_t current_batch_size = (remaining_count > MAX_BATCH_SIZE) ? MAX_BATCH_SIZE : remaining_count;
+					
+					// 创建当前批次的数据包
+					uint8_t batch_data[8 + current_batch_size * 39];
+					write_uint64_be(batch_data, current_batch_size);
+					
+					// 复制当前批次的数据
+					memcpy(batch_data + 8, data + 8 + current_batch_start * 39, current_batch_size * 39);
+					
+					// 发送当前批次
+					bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, batch_data, sizeof(batch_data));
+					
+					// 记录批次发送信息
+					char batch_buf[256];
+					snprintf(batch_buf, sizeof(batch_buf),
+					 "[%s] send establish batch to [%s], batch_size: %llu, remaining: %llu\n",
+					 bgp_router_id_str, tmp_peer_remote_id_str,
+					 (unsigned long long)current_batch_size, (unsigned long long)(remaining_count - current_batch_size));
+					if (fp1 != -1) {
+						write(fp1, batch_buf, strlen(batch_buf));
+					}
+					
+					// 更新计数器
+					current_batch_start += current_batch_size;
+					remaining_count -= current_batch_size;
+				}
 				
 			}
 		}

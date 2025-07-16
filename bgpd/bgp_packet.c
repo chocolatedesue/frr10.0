@@ -3934,7 +3934,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 	inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, local_router_id_str, INET_ADDRSTRLEN);
 	inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_router_id_str, INET_ADDRSTRLEN);
 	
-	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND );
+	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND , 0666);
 	
 	// 检查是否有任何一个 NLRI 是从本地路由器发起的，或者没有新的 NLRI
 	bool is_self_originated = false;
@@ -3981,46 +3981,69 @@ int bgp_link_state_receive(struct peer_connection *connection,
 			 first_local_node_str, first_remote_node_str, first_spf_status);
 			write(fp1, tmp_buf, strlen(tmp_buf));
 
-
-			// 转发原始数据包
-			// 重新创建数据包内容进行转发 (新格式: 35字节每个NLRI)
-			uint8_t forward_data[8 + link_nlri_count * 39];
-			write_uint64_be(forward_data, link_nlri_count);
+			// 分批发送link_state消息，每批最多60个
+			const uint64_t MAX_BATCH_SIZE = 60;
+			uint64_t remaining_count = link_nlri_count;
+			uint64_t current_batch_start = 0;
 			
-			// 重新读取并复制所有 NLRI 数据
-			stream_set_getp(s, data_start_pos + 8); // 重新定位到第一个 NLRI
-			for (uint64_t i = 0; i < link_nlri_count; i++) {
-				size_t offset = 8 + i * 39;
+			while (remaining_count > 0) {
+				// 计算当前批次的大小
+				uint64_t current_batch_size = (remaining_count > MAX_BATCH_SIZE) ? MAX_BATCH_SIZE : remaining_count;
 				
-				uint32_t local_node = stream_getl(s);
-				uint32_t remote_node = stream_getl(s);
+				// 创建当前批次的数据包
+				uint8_t forward_data[8 + current_batch_size * 39];
+				write_uint64_be(forward_data, current_batch_size);
 				
-				// 读取TLV格式的IPv6地址
-				uint8_t tlv_type = stream_getc(s);
-				uint8_t tlv_length = stream_getc(s);
-				uint8_t ipv6_addr[16];
-				stream_get(ipv6_addr, s, 16);
+				// 重新定位到当前批次的起始位置
+				stream_set_getp(s, data_start_pos + 8 + current_batch_start * 39);
 				
-				uint64_t seq_num = stream_getq(s);
-				uint8_t spf_status = stream_getc(s);
+				// 复制当前批次的NLRI数据
+				for (uint64_t i = 0; i < current_batch_size; i++) {
+					size_t offset = 8 + i * 39;
+					
+					uint32_t local_node = stream_getl(s);
+					uint32_t remote_node = stream_getl(s);
+					
+					// 读取TLV格式的IPv6地址
+					uint8_t tlv_type = stream_getc(s);
+					uint8_t tlv_length = stream_getc(s);
+					uint8_t ipv6_addr[16];
+					stream_get(ipv6_addr, s, 16);
+					
+					uint64_t seq_num = stream_getq(s);
+					uint8_t spf_status = stream_getc(s);
 
-				ifindex_t ifindex = stream_getl(s);
+					ifindex_t ifindex = stream_getl(s);
+					
+					// 写入转发数据
+					write_uint32_be(forward_data + offset, local_node);
+					write_uint32_be(forward_data + offset + 4, remote_node);
+					
+					// 写入TLV格式的IPv6地址
+					forward_data[offset + 8] = tlv_type;
+					forward_data[offset + 9] = tlv_length;
+					memcpy(forward_data + offset + 10, ipv6_addr, 16);
+					
+					write_uint64_be(forward_data + offset + 26, seq_num);
+					forward_data[offset + 34] = spf_status;
+					write_uint32_be(forward_data + offset + 35, ifindex);
+				}
 				
-				// 写入转发数据
-				write_uint32_be(forward_data + offset, local_node);
-				write_uint32_be(forward_data + offset + 4, remote_node);
+				// 发送当前批次
+				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, forward_data, sizeof(forward_data));
 				
-				// 写入TLV格式的IPv6地址
-				forward_data[offset + 8] = tlv_type;
-				forward_data[offset + 9] = tlv_length;
-				memcpy(forward_data + offset + 10, ipv6_addr, 16);
+				// 记录批次发送信息
+				char batch_buf[256];
+				snprintf(batch_buf, sizeof(batch_buf),
+				 "[%s] send batch to [%s], batch_size: %llu, remaining: %llu\n",
+				 local_router_id_str, tmp_peer_router_id_str, 
+				 (unsigned long long)current_batch_size, (unsigned long long)(remaining_count - current_batch_size));
+				write(fp1, batch_buf, strlen(batch_buf));
 				
-				write_uint64_be(forward_data + offset + 26, seq_num);
-				forward_data[offset + 34] = spf_status;
-				write_uint32_be(forward_data + offset + 35, ifindex);
+				// 更新计数器
+				current_batch_start += current_batch_size;
+				remaining_count -= current_batch_size;
 			}
-
-			bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, forward_data, sizeof(forward_data));
 		}
 		// close(fp1);
 	}
@@ -4383,14 +4406,27 @@ void bgp_link_state_send(struct peer_connection *connection,
 		 "[%s] send_custom_bgp_data to [%s], msg_type: %s, data_len: %zu\n",
 		 src_router_id_str, dst_router_id_str,
 		  type_str, data_len);
-	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND );
+	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND , 0666);
 	write(fp1, debug_buf, strlen(debug_buf));
 	close(fp1);
 
 
     frr_mutex_lock_autounlock(&connection->io_mtx);
-    // 1. 创建数据包
-    s = stream_new(BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE + data_len);
+
+	if (data_len + BGP_HEADER_SIZE  > BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE) {
+		snprintf(debug_buf, sizeof(debug_buf),
+			 "[%s] send_custom_bgp_data to [%s], msg_type: %s, data_len: %zu exceeds max size %d",
+			 src_router_id_str, dst_router_id_str,
+			 type_str, data_len, BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE);
+		// flog_err(EC_BGP_PKT_, "%s", debug_buf);
+		int fp2 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND, 0666 );
+		write(fp2, debug_buf, strlen(debug_buf));
+		close(fp2);
+		return;
+	}
+
+	// 1. 创建数据包
+    s = stream_new(BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE);
 
     // 2. 设置BGP头部（marker + 长度占位符 + 类型）
     bgp_packet_set_marker(s, msg_type);

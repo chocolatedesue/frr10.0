@@ -1,0 +1,101 @@
+# syntax=docker/dockerfile:1
+
+# =============================================================================
+# Base Alpine Builder Stage
+# =============================================================================
+FROM alpine:3.20 AS alpine-builder
+
+RUN apk add --no-cache \
+    abuild \
+    alpine-conf \
+    alpine-sdk \
+    doas \
+    && setup-apkcache /var/cache/apk \
+    && mkdir -p /pkgs/apk \
+    && echo 'permit nopass builder' > /etc/doas.d/doas.conf \
+    && chmod u+s /usr/bin/doas
+
+RUN adduser -D -G abuild builder
+
+# =============================================================================
+# libyang APK Builder Stage
+# =============================================================================
+FROM alpine-builder AS libyang-builder
+
+COPY docker/alpine/libyang/APKBUILD /src/libyang
+RUN  chown -R builder:abuild /pkgs /src
+
+USER builder
+RUN abuild-keygen -a -i -n && \
+    cd /src/libyang && \
+    abuild -r -P /pkgs/apk
+
+# =============================================================================
+# FRR Source Distribution Builder Stage
+# =============================================================================
+FROM alpine:3.20 AS source-builder
+
+RUN mkdir -p /src/alpine /pkgs/apk
+COPY alpine/APKBUILD.in /src/alpine
+COPY --from=libyang-builder /pkgs/apk /pkgs/apk
+RUN apk add --no-cache --allow-untrusted /pkgs/apk/*/*.apk
+
+RUN source /src/alpine/APKBUILD.in \
+    && apk add \
+        --no-cache \
+        --update-cache \
+        $makedepends
+
+COPY . /src
+ARG PKGVER
+
+RUN cd /src \
+    && ./bootstrap.sh \
+    && ./configure \
+        --enable-multipath=256 \
+        --enable-numeric-version \
+        --with-pkg-extra-version="_git$PKGVER" \
+    && make -j$(nproc) dist
+
+# =============================================================================
+# FRR APK Builder Stage
+# =============================================================================
+FROM alpine-builder AS frr-builder
+
+COPY --from=source-builder /src/frr-*.tar.gz /src/alpine/* /dist/
+# --- CORRECTED LINE ---
+COPY --from=libyang-builder /pkgs/apk /pkgs/apk
+
+RUN apk add --no-cache --allow-untrusted /pkgs/apk/*/*.apk
+RUN chown -R builder /dist /pkgs
+
+USER builder
+RUN cd /dist && abuild -r -P /pkgs/apk
+
+# =============================================================================
+# Final Runtime Stage
+# =============================================================================
+FROM alpine:3.20
+
+RUN apk add \
+    --no-cache \
+    --update-cache \
+    tini
+
+RUN mkdir -p /pkgs/apk
+COPY --from=frr-builder /pkgs/apk/ /pkgs/apk/
+RUN apk add \
+    --no-cache \
+    --allow-untrusted \
+    /pkgs/apk/*/*.apk \
+    && rm -rf /pkgs
+
+RUN mkdir -p /var/run/frr \
+    && addgroup -S frr \
+    && adduser -S -G frr frr \
+    && chown -R frr:frr /etc/frr /var/run/frr
+
+COPY docker/alpine/docker-start /usr/lib/frr/docker-start
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["/usr/lib/frr/docker-start"]
