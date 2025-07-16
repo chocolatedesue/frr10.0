@@ -597,34 +597,32 @@ static bool validate_header(struct peer_connection *connection)
 		return false;
 	}
 
-	// TODO: recover the check for packet length
-
 	/* Minimum packet length check. */
-	// if ((size < BGP_HEADER_SIZE) || (size > peer->max_packet_size)
-	//     || (type == BGP_MSG_OPEN && size < BGP_MSG_OPEN_MIN_SIZE)
-	//     || (type == BGP_MSG_UPDATE && size < BGP_MSG_UPDATE_MIN_SIZE)
-	//     || (type == BGP_MSG_NOTIFY && size < BGP_MSG_NOTIFY_MIN_SIZE)
-	//     || (type == BGP_MSG_KEEPALIVE && size != BGP_MSG_KEEPALIVE_MIN_SIZE)
-	//     || (type == BGP_MSG_ROUTE_REFRESH_NEW
-	// 	&& size < BGP_MSG_ROUTE_REFRESH_MIN_SIZE)
-	//     || (type == BGP_MSG_ROUTE_REFRESH_OLD
-	// 	&& size < BGP_MSG_ROUTE_REFRESH_MIN_SIZE)
-	//     || (type == BGP_MSG_CAPABILITY
-	// 	&& size < BGP_MSG_CAPABILITY_MIN_SIZE)) {
-	// 	if (bgp_debug_neighbor_events(peer)) {
-	// 		zlog_debug("%s bad message length - %d for %s",
-	// 			   peer->host, size,
-	// 			   type == 128 ? "ROUTE-REFRESH"
-	// 				       : bgp_type_str[(int)type]);
-	// 	}
+	if ((size < BGP_HEADER_SIZE) || (size > peer->max_packet_size)
+	    || (type == BGP_MSG_OPEN && size < BGP_MSG_OPEN_MIN_SIZE)
+	    || (type == BGP_MSG_UPDATE && size < BGP_MSG_UPDATE_MIN_SIZE)
+	    || (type == BGP_MSG_NOTIFY && size < BGP_MSG_NOTIFY_MIN_SIZE)
+	    || (type == BGP_MSG_KEEPALIVE && size != BGP_MSG_KEEPALIVE_MIN_SIZE)
+	    || (type == BGP_MSG_ROUTE_REFRESH_NEW
+		&& size < BGP_MSG_ROUTE_REFRESH_MIN_SIZE)
+	    || (type == BGP_MSG_ROUTE_REFRESH_OLD
+		&& size < BGP_MSG_ROUTE_REFRESH_MIN_SIZE)
+	    || (type == BGP_MSG_CAPABILITY
+		&& size < BGP_MSG_CAPABILITY_MIN_SIZE)) {
+		if (bgp_debug_neighbor_events(peer)) {
+			zlog_debug("%s bad message length - %d for %s",
+				   peer->host, size,
+				   type == 128 ? "ROUTE-REFRESH"
+					       : bgp_type_str[(int)type]);
+		}
 
-	// 	uint16_t nsize = htons(size);
+		uint16_t nsize = htons(size);
 
-	// 	bgp_notify_io_invalid(peer, BGP_NOTIFY_HEADER_ERR,
-	// 			      BGP_NOTIFY_HEADER_BAD_MESLEN,
-	// 			      (unsigned char *)&nsize, 2);
-	// 	return false;
-	// }
+		bgp_notify_io_invalid(peer, BGP_NOTIFY_HEADER_ERR,
+				      BGP_NOTIFY_HEADER_BAD_MESLEN,
+				      (unsigned char *)&nsize, 2);
+		return false;
+	}
 
 	return true;
 }
