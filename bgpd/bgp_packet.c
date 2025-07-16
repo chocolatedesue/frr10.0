@@ -4031,7 +4031,7 @@ int bgp_link_state_receive(struct peer_connection *connection,
 				
 				// 发送当前批次
 				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, forward_data, sizeof(forward_data));
-				
+				// bgp_writes_on(tmp_peer->connection);
 				// 记录批次发送信息
 				char batch_buf[256];
 				snprintf(batch_buf, sizeof(batch_buf),
@@ -4411,7 +4411,7 @@ void bgp_link_state_send(struct peer_connection *connection,
 	close(fp1);
 
 
-    frr_mutex_lock_autounlock(&connection->io_mtx);
+    // frr_mutex_lock_autounlock(&connection->io_mtx);
 
 	if (data_len + BGP_HEADER_SIZE  > BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE) {
 		snprintf(debug_buf, sizeof(debug_buf),
@@ -4440,5 +4440,9 @@ void bgp_link_state_send(struct peer_connection *connection,
     // 4. 设置正确的数据包长度
     bgp_packet_set_size(s);
 
-	bgp_write_customize(connection, peer, msg_type, s);
+	bgp_packet_add(connection, connection->peer, s);
+
+	
+	bgp_writes_on(connection);
+	// bgp_write_customize(connection, peer, msg_type, s);
 }

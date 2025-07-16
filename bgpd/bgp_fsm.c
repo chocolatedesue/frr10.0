@@ -1370,6 +1370,8 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 
 				
 				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof data);
+
+				// bgp_writes_on(tmp_peer->connection);
 			}
 		}
 
@@ -2504,6 +2506,8 @@ bgp_establish(struct peer_connection *connection)
 					
 					// 发送当前批次
 					bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, batch_data, sizeof(batch_data));
+
+					// bgp_writes_on(tmp_peer->connection);
 					
 					// 记录批次发送信息
 					char batch_buf[256];
