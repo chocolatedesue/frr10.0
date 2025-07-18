@@ -1,0 +1,105 @@
+# syntax=docker/dockerfile:1
+
+# =============================================================================
+# FRR Fast Build Dockerfile
+# Uses pre-built base image to accelerate build process
+# Build base image first: docker build -f Dockerfile.buildbase -t frr-buildbase .
+# Then build this: docker build -f Dockerfile.fast -t frr .
+# =============================================================================
+
+# =============================================================================
+# FRR Source Distribution Builder Stage
+# Uses the pre-built base image with libyang and dependencies
+# =============================================================================
+FROM frr-buildbase:latest AS source-builder
+
+# Copy source code and build distribution
+COPY . /src
+ARG PKGVER
+
+RUN cd /src \
+    && ./bootstrap.sh \
+    && ./configure \
+                --prefix=/usr \
+                --sysconfdir=/etc \
+                --localstatedir=/var \
+                --sbindir=/usr/lib/frr \
+                --enable-sharpd \
+                --enable-multipath=64 \
+                --enable-user=frr \
+                --enable-group=frr \
+                --enable-vty-group=frrvty \
+                --enable-snmp=agentx \
+                --enable-scripting \
+                --enable-numeric-version \
+                --with-pkg-extra-version="_git$PKGVER" \
+    && make -j$(nproc) dist
+
+# =============================================================================
+# FRR APK Builder Stage
+# Builds the FRR APK from the source distribution
+# =============================================================================
+FROM frr-buildbase:latest AS frr-builder
+
+# Install APK building tools (not included in buildbase)
+RUN apk add \
+    --update-cache \
+    abuild \
+    alpine-conf \
+    alpine-sdk \
+    doas \
+    && setup-apkcache /var/cache/apk \
+    && mkdir -p /pkgs/apk \
+    && echo 'builder ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers \
+    && echo 'permit nopass builder' >> /etc/doas.d/doas.conf
+
+# Create builder user and generate signing keys
+RUN adduser -D -G abuild builder \
+    && su builder -c 'abuild-keygen -a -i -n'
+
+# Copy source distribution from previous stage
+COPY --from=source-builder /src/frr-*.tar.gz /dist/
+COPY --from=source-builder /src/alpine/* /dist/
+
+# Set up permissions
+RUN chown -R builder /dist /pkgs
+
+# Build FRR APK
+USER builder
+RUN cd /dist \
+    && abuild checksum \
+    && git init \
+    && abuild -r -P /pkgs/apk -K
+
+# =============================================================================
+# Final Runtime Stage
+# Creates the final FRR runtime image
+# =============================================================================
+FROM alpine:3.20
+
+# Install runtime dependencies
+RUN apk add \
+    --no-cache \
+    --update-cache \
+    tini
+
+# Copy and install FRR packages
+RUN mkdir -p /pkgs/apk
+COPY --from=frr-builder /pkgs/apk/ /pkgs/apk/
+RUN apk add \
+    --no-cache \
+    --allow-untrusted \
+    /pkgs/apk/*/*.apk \
+    && rm -rf /pkgs
+
+# Set up FRR runtime environment
+RUN mkdir -p /var/run/frr \
+    && chown -R frr:frr /etc/frr /var/run/frr \
+    && apk add iperf3 --no-cache --update-cache 
+
+# Copy startup script
+COPY docker/alpine/docker-start /usr/lib/frr/docker-start
+
+# Configure container runtime
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["/usr/lib/frr/docker-start"]
