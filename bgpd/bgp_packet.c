@@ -3823,6 +3823,18 @@ int bgp_capability_receive(struct peer_connection *connection,
 }
 
 
+// 辅助函数声明和实现
+static inline uint32_t read_uint32_be(const uint8_t *data) {
+	return (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3];
+}
+
+static inline uint64_t read_uint64_be(const uint8_t *data) {
+	return ((uint64_t)read_uint32_be(data) << 32) | read_uint32_be(data + 4);
+}
+
+static bool should_process_nlri(struct tvr_link_nlri* existing, uint64_t seq_num, uint8_t spf_status);
+static void forward_to_peers_optimized(struct peer *source_peer, uint8_t *nlri_data, bool *nlri_processed, uint64_t nlri_count);
+
 int bgp_link_state_receive(struct peer_connection *connection,
 				 struct peer *peer, bgp_size_t size)
 {
@@ -3830,27 +3842,33 @@ int bgp_link_state_receive(struct peer_connection *connection,
 	uint64_t link_nlri_count;
 	char debug_buf[512];
 	char local_router_id_str[INET_ADDRSTRLEN], remote_router_id_str[INET_ADDRSTRLEN];
-	bool has_new_nlri = false;
+	bool has_updates = false;  // 简化：只保留一个关键状态变量
 
 	s = peer->curr;
-	
+
 	// 记录数据开始位置（已经跳过了 BGP 头部）
 	size_t data_start_pos = stream_get_getp(s);
-	
+
 	// 首先读取 Link NLRI 数量（8字节）
 	link_nlri_count = stream_getq(s);
-	
+
 	if (link_nlri_count == 0) {
 		return BGP_PACKET_NOOP;
 	}
 
-	// 批量处理每个 Link NLRI
+	// 创建处理结果数组和数据存储，避免重复循环
+	bool *nlri_processed = calloc(link_nlri_count, sizeof(bool));
+	uint8_t *nlri_data = malloc(link_nlri_count * 39);  // 存储所有NLRI的原始数据
+
+	// 一次循环：处理NLRI并记录结果
 	for (uint64_t i = 0; i < link_nlri_count; i++) {
 		uint32_t local_node, remote_node;
 		uint64_t seq_num;
 		uint8_t spf_status;
-		
-		
+
+		// 记录当前位置，用于存储原始数据
+		size_t nlri_start_pos = stream_get_getp(s);
+
 		local_node = stream_getl(s);
 		remote_node = stream_getl(s);
 
@@ -3864,36 +3882,41 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		seq_num = stream_getq(s);
 		spf_status = stream_getc(s);
 		ifindex_t ifindex = stream_getl(s);
-		
+
+		// 存储原始NLRI数据用于转发
+		size_t nlri_end_pos = stream_get_getp(s);
+		stream_set_getp(s, nlri_start_pos);
+		stream_get(nlri_data + i * 39, s, 39);
+		stream_set_getp(s, nlri_end_pos);
 
 		// 创建用于查找的 Link NLRI
 		struct tvr_nlri rec_link_nlri;
 		rec_link_nlri.type = LINK;
-		
+
 		struct in6_addr peer_addr_v6 = IN6ADDR_ANY_INIT;
-	
+
 		if (ip_type == 0x02) { // IPv6
 			for (int j = 0; j < 16; j++) {
 				peer_addr_v6.s6_addr[j] = ipv6_addr[j];
 			}
-		} 
-				
+		}
+
 		tvr_db_assign_link_nlri(
 			&rec_link_nlri.u.link_nlri, local_node, remote_node, peer_addr_v6,
 			0, 1, spf_status, seq_num, ifindex);
-		
+
 		// 查找数据库中是否存在相同的 NLRI
-		struct tvr_link_nlri* pre_link_nlri = lnlri_rb_find(
+		struct tvr_link_nlri* existing_nlri = lnlri_rb_find(
 			&peer->bgp->db->lnlri_rb_root, &rec_link_nlri.u.link_nlri);
 
-		// 如果不存在或状态不同，则处理
-		if (!pre_link_nlri || (pre_link_nlri && pre_link_nlri->attr.spf_status != spf_status)) {
+		// 判断是否需要处理
+		if (should_process_nlri(existing_nlri, seq_num, spf_status)) {
 			// 处理 Link NLRI
 			tvr_db_process(peer->bgp->db, &rec_link_nlri, false);
-			
+
 			// 创建并处理对应的 Node NLRI
 			struct tvr_nlri local_node_nlri, remote_node_nlri;
-			
+
 			local_node_nlri.type = NODE;
 			remote_node_nlri.type = NODE;
 			tvr_db_assign_node_nlri(
@@ -3902,27 +3925,28 @@ int bgp_link_state_receive(struct peer_connection *connection,
 				&remote_node_nlri.u.node_nlri, remote_node, 0, 0, seq_num);
 			tvr_db_process(peer->bgp->db, &local_node_nlri, false);
 			tvr_db_process(peer->bgp->db, &remote_node_nlri, false);
-			
-			has_new_nlri = true;
+
+			// 标记为已处理，可以转发
+			nlri_processed[i] = true;
+			has_updates = true;
 		}
 	}
-
-	// 如果没有新的 NLRI，则记录为重复
-	int flag = has_new_nlri ? 0 : 1;
 
 	// 获取第一个 NLRI 的信息用于日志记录
 	uint32_t first_local_node = 0, first_remote_node = 0;
 	uint8_t first_spf_status = 0;
-	
+
 	if (link_nlri_count > 0) {
 		// 重新定位到第一个 NLRI 的位置（data_start_pos + 8字节的计数）
 		stream_set_getp(s, data_start_pos + 8);
 		first_local_node = stream_getl(s);
 		first_remote_node = stream_getl(s);
-		
-		// 跳过TLV格式的IPv6地址 (18字节: 2字节头部 + 16字节IPv6)
-		stream_forward_getp(s, 18);
-		
+
+		// 正确跳过TLV格式的IPv6地址
+		uint8_t ip_type = stream_getc(s);
+		uint8_t ip_tlv_len = stream_getc(s);
+		stream_forward_getp(s, ip_tlv_len);  // 跳过实际长度的IPv6数据
+
 		// 跳过 seq_num (8字节)，然后读取 spf_status
 		stream_forward_getp(s, 8);
 		first_spf_status = stream_getc(s);
@@ -3933,27 +3957,20 @@ int bgp_link_state_receive(struct peer_connection *connection,
 	inet_ntop(AF_INET, &first_remote_node, first_remote_node_str, INET_ADDRSTRLEN);
 	inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, local_router_id_str, INET_ADDRSTRLEN);
 	inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_router_id_str, INET_ADDRSTRLEN);
-	
+
 	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND , 0666);
-	
-	// 检查是否有任何一个 NLRI 是从本地路由器发起的，或者没有新的 NLRI
-	bool is_self_originated = false;
-	if (link_nlri_count > 0 && first_local_node == peer->bgp->router_id.s_addr) {
-		is_self_originated = true;
-	}
-	
-	if (is_self_originated || !has_new_nlri) {
+
+	// 简化的处理结果判断 - 删除本地路由发出的判断
+	if (!has_updates) {
 		snprintf(debug_buf, sizeof(debug_buf),
-		 "[%s] rcv duplicate LINKSTATE from [%s], count: %llu, first_local: %s, first_remote: %s, first_spf_status: %u, flag: %d\n",
-		 local_router_id_str, remote_router_id_str, (unsigned long long)link_nlri_count, 
-		 first_local_node_str, first_remote_node_str, first_spf_status, flag);
+		 "[%s] rcv duplicate LINKSTATE from [%s], count: %llu, first_local: %s, first_remote: %s, first_spf_status: %u\n",
+		 local_router_id_str, remote_router_id_str, (unsigned long long)link_nlri_count,
+		 first_local_node_str, first_remote_node_str, first_spf_status);
 		 write(fp1, debug_buf, strlen(debug_buf));
 
 	} else {
 
 		// struct tvr_spf *spf  = tvr_spf_create(peer -> bgp->db, peer -> bgp -> router_id.s_addr , 0, 0);
-
-
 
 		snprintf(debug_buf, sizeof(debug_buf),
 		 "[%s] rcv New LINKSTATE from [%s], count: %llu, first_local: %s, first_remote: %s, first_spf_status: %u\n",
@@ -3961,96 +3978,18 @@ int bgp_link_state_receive(struct peer_connection *connection,
 		first_local_node_str, first_remote_node_str, first_spf_status);
 
 		write(fp1, debug_buf, strlen(debug_buf));
-		
 
-		struct listnode *node, *nnode;
-		struct peer *tmp_peer;
-
-		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
-			if (tmp_peer->connection->status != Established)
-				continue;
-			if (tmp_peer == peer)
-				continue;
-			char tmp_buf[512];
-			char tmp_peer_router_id_str[INET_ADDRSTRLEN];
-			inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr,
-			tmp_peer_router_id_str, INET_ADDRSTRLEN);
-			snprintf(tmp_buf, sizeof(tmp_buf),
-			 "[%s] rcv state and send to connected peer [%s], count: %llu, first_local: %s, first_remote: %s, first_spf_status: %u\n",
-			 local_router_id_str, tmp_peer_router_id_str, (unsigned long long)link_nlri_count,
-			 first_local_node_str, first_remote_node_str, first_spf_status);
-			write(fp1, tmp_buf, strlen(tmp_buf));
-
-			// 分批发送link_state消息，每批最多60个
-			const uint64_t MAX_BATCH_SIZE = 60;
-			uint64_t remaining_count = link_nlri_count;
-			uint64_t current_batch_start = 0;
-			
-			while (remaining_count > 0) {
-				// 计算当前批次的大小
-				uint64_t current_batch_size = (remaining_count > MAX_BATCH_SIZE) ? MAX_BATCH_SIZE : remaining_count;
-				
-				// 创建当前批次的数据包
-				uint8_t forward_data[8 + current_batch_size * 39];
-				write_uint64_be(forward_data, current_batch_size);
-				
-				// 重新定位到当前批次的起始位置
-				stream_set_getp(s, data_start_pos + 8 + current_batch_start * 39);
-				
-				// 复制当前批次的NLRI数据
-				for (uint64_t i = 0; i < current_batch_size; i++) {
-					size_t offset = 8 + i * 39;
-					
-					uint32_t local_node = stream_getl(s);
-					uint32_t remote_node = stream_getl(s);
-					
-					// 读取TLV格式的IPv6地址
-					uint8_t tlv_type = stream_getc(s);
-					uint8_t tlv_length = stream_getc(s);
-					uint8_t ipv6_addr[16];
-					stream_get(ipv6_addr, s, 16);
-					
-					uint64_t seq_num = stream_getq(s);
-					uint8_t spf_status = stream_getc(s);
-
-					ifindex_t ifindex = stream_getl(s);
-					
-					// 写入转发数据
-					write_uint32_be(forward_data + offset, local_node);
-					write_uint32_be(forward_data + offset + 4, remote_node);
-					
-					// 写入TLV格式的IPv6地址
-					forward_data[offset + 8] = tlv_type;
-					forward_data[offset + 9] = tlv_length;
-					memcpy(forward_data + offset + 10, ipv6_addr, 16);
-					
-					write_uint64_be(forward_data + offset + 26, seq_num);
-					forward_data[offset + 34] = spf_status;
-					write_uint32_be(forward_data + offset + 35, ifindex);
-				}
-				
-				// 发送当前批次
-				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, forward_data, sizeof(forward_data));
-				// bgp_writes_on(tmp_peer->connection);
-				// 记录批次发送信息
-				char batch_buf[256];
-				snprintf(batch_buf, sizeof(batch_buf),
-				 "[%s] send batch to [%s], batch_size: %llu, remaining: %llu\n",
-				 local_router_id_str, tmp_peer_router_id_str, 
-				 (unsigned long long)current_batch_size, (unsigned long long)(remaining_count - current_batch_size));
-				write(fp1, batch_buf, strlen(batch_buf));
-				
-				// 更新计数器
-				current_batch_start += current_batch_size;
-				remaining_count -= current_batch_size;
-			}
-		}
-		// close(fp1);
+		// 简化的转发逻辑
+		forward_to_peers_optimized(peer, nlri_data, nlri_processed, link_nlri_count);
 	}
+
+	// 清理内存
+	free(nlri_processed);
+	free(nlri_data);
 
 	close(fp1);
 
-	
+
 	return BGP_PACKET_NOOP;
 
 }
@@ -4445,4 +4384,83 @@ void bgp_link_state_send(struct peer_connection *connection,
 	
 	bgp_writes_on(connection);
 	// bgp_write_customize(connection, peer, msg_type, s);
+}
+
+// 辅助函数实现
+static bool should_process_nlri(struct tvr_link_nlri* existing, uint64_t seq_num, uint8_t spf_status)
+{
+	if (!existing) return true;  // 新NLRI，需要处理
+	if (seq_num > existing->attr.seq_num) return true;  // 更新版本，需要处理
+	if (seq_num == existing->attr.seq_num && existing->attr.spf_status != spf_status) return true;  // 状态更新，需要处理
+	return false;  // 其他情况不处理
+}
+
+static void forward_to_peers_optimized(struct peer *source_peer, uint8_t *nlri_data, bool *nlri_processed, uint64_t nlri_count)
+{
+	struct listnode *node, *nnode;
+	struct peer *tmp_peer;
+
+	// 对每个peer，只发送它需要的NLRI
+	for (ALL_LIST_ELEMENTS(source_peer->bgp->peer, node, nnode, tmp_peer)) {
+		if (tmp_peer->connection->status != Established) continue;
+		if (tmp_peer == source_peer) continue;  // 不向发送方回传
+
+		// 收集需要转发给该peer的NLRI
+		uint8_t *forward_nlris = malloc(nlri_count * 39);  // 最多这么多
+		uint64_t forward_count = 0;
+
+		// 直接收集所有已处理的NLRI用于转发
+		for (uint64_t i = 0; i < nlri_count; i++) {
+			// 只转发已经被标记为处理过的NLRI
+			if (!nlri_processed[i]) continue;
+
+			// 直接复制原始数据，无需再次判断
+			memcpy(forward_nlris + forward_count * 39, nlri_data + i * 39, 39);
+			forward_count++;
+		}
+
+		// 只有需要转发的NLRI才发送
+		if (forward_count > 0) {
+			char local_router_id_str[INET_ADDRSTRLEN], tmp_peer_router_id_str[INET_ADDRSTRLEN];
+			inet_ntop(AF_INET, &source_peer->bgp->router_id.s_addr, local_router_id_str, INET_ADDRSTRLEN);
+			inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr, tmp_peer_router_id_str, INET_ADDRSTRLEN);
+
+			int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+			char tmp_buf[512];
+			snprintf(tmp_buf, sizeof(tmp_buf),
+			 "[%s] selective forward to [%s], total: %llu, forward: %llu\n",
+			 local_router_id_str, tmp_peer_router_id_str,
+			 (unsigned long long)nlri_count, (unsigned long long)forward_count);
+			write(fp1, tmp_buf, strlen(tmp_buf));
+			close(fp1);
+
+			// 分批发送，每批最多60个
+			const uint64_t MAX_BATCH_SIZE = 60;
+			uint64_t remaining_count = forward_count;
+			uint64_t current_batch_start = 0;
+
+			while (remaining_count > 0) {
+				uint64_t current_batch_size = (remaining_count > MAX_BATCH_SIZE) ? MAX_BATCH_SIZE : remaining_count;
+
+				// 创建当前批次的数据包
+				uint8_t *batch_data = malloc(8 + current_batch_size * 39);
+				write_uint64_be(batch_data, current_batch_size);
+
+				// 从forward_nlris复制当前批次的数据
+				memcpy(batch_data + 8, forward_nlris + current_batch_start * 39, current_batch_size * 39);
+
+				// 发送当前批次
+				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, batch_data, 8 + current_batch_size * 39);
+
+				free(batch_data);
+
+				// 更新计数器
+				current_batch_start += current_batch_size;
+				remaining_count -= current_batch_size;
+			}
+		}
+
+		// 释放转发缓冲区
+		free(forward_nlris);
+	}
 }

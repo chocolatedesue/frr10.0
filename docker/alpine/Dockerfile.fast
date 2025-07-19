@@ -11,7 +11,11 @@
 # FRR Source Distribution Builder Stage
 # Uses the pre-built base image with libyang and dependencies
 # =============================================================================
-FROM frr-buildbase:latest AS source-builder
+
+ARG BASE_BUILD_IMAGE=frr-buildbase:latest
+
+
+FROM ${BASE_BUILD_IMAGE} AS source-builder
 
 # Copy source code and build distribution
 COPY . /src
@@ -39,7 +43,7 @@ RUN cd /src \
 # FRR APK Builder Stage
 # Builds the FRR APK from the source distribution
 # =============================================================================
-FROM frr-buildbase:latest AS frr-builder
+FROM ${BASE_BUILD_IMAGE} AS frr-builder
 
 # Install APK building tools (not included in buildbase)
 RUN apk add \
