@@ -3843,6 +3843,8 @@ static int bgp_process_tlv_link_array(struct peer *peer, struct stream *s, uint1
 static int bgp_process_single_link_nlri(struct peer *peer, struct stream *s,
                                        uint32_t local_node, uint32_t remote_node,
                                        struct in6_addr *peer_addr_v6, uint32_t ifindex);
+static int bgp_process_tlv_prefix_array(struct peer *peer, struct stream *s, uint16_t item_count,
+                                       bool *has_updates, char *debug_info, size_t debug_info_size);
 static uint16_t read_uint16_be(struct stream *s);
 static void bgp_log_tlv_processing_result(struct peer *peer, bool has_updates, const char *debug_info);
 static void bgp_forward_tlv_link_to_peers(struct peer *source_peer, struct tvr_link_nlri *link_nlri);
@@ -3901,12 +3903,11 @@ static int bgp_process_tlv_packet(struct peer_connection *connection, struct pee
 			break;
 
 		case 0x03: /* TLV_TYPE_PREFIX_ARRAY */
-			/* Log prefix array but don't process */
-			snprintf(debug_info + strlen(debug_info), sizeof(debug_info) - strlen(debug_info),
-			         "Prefix array (type=0x03, count=%u) - logged only. ", item_count);
-
-			/* Skip prefix data: item_count * 26 bytes per prefix */
-			stream_forward_getp(s, item_count * 26);
+			/* Process prefix array */
+			if (bgp_process_tlv_prefix_array(peer, s, item_count, &has_updates,
+			                                debug_info, sizeof(debug_info)) < 0) {
+				return BGP_Stop;
+			}
 			break;
 
 		default:
@@ -3922,11 +3923,25 @@ static int bgp_process_tlv_packet(struct peer_connection *connection, struct pee
 	/* Log the processing result */
 	bgp_log_tlv_processing_result(peer, has_updates, debug_info);
 
+	/* Execute SPF calculation after processing TLV packets */
 	uint32_t src_router_id = peer->bgp->router_id.s_addr;
-	
-	tvr_spf_execute(
-		peer->bgp, src_router_id, 0, 1, 1, 1
+
+	struct tvr_spf_result spf_result = tvr_spf_execute(
+		peer->bgp, src_router_id, 0, 0, true, true
 	);
+
+	/* Log SPF execution result if needed */
+	if (spf_result.status != TVR_SPF_SUCCESS) {
+		char debug_buf[256];
+		snprintf(debug_buf, sizeof(debug_buf),
+		         "SPF execution failed with status %d for router %u\n",
+		         spf_result.status, src_router_id);
+		int fp = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		if (fp >= 0) {
+			write(fp, debug_buf, strlen(debug_buf));
+			close(fp);
+		}
+	}
 
 	return BGP_PACKET_NOOP;
 }
@@ -4080,6 +4095,91 @@ static void bgp_forward_tlv_link_to_peers(struct peer *source_peer, struct tvr_l
 			bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, packet_data, packet_size);
 		}
 	}
+}
+
+/* Function to process TLV Prefix array according to define.md specification */
+static int bgp_process_tlv_prefix_array(struct peer *peer, struct stream *s, uint16_t item_count,
+                                       bool *has_updates, char *debug_info, size_t debug_info_size)
+{
+	struct listnode *node, *nnode;
+	struct peer *tmp_peer;
+
+	snprintf(debug_info + strlen(debug_info), debug_info_size - strlen(debug_info),
+	         "Prefix array (type=0x03, count=%u) processed. ", item_count);
+
+	/* Process each prefix NLRI (26 bytes each according to define.md) */
+	for (uint16_t i = 0; i < item_count; i++) {
+		/* Read prefix structure (26 bytes) */
+		uint32_t local_node_id = 0;
+		struct in6_addr prefix_ipv6;
+		uint8_t prefix_len = 0;
+		uint32_t seq_num = 0;
+		uint8_t spf_status = 0;
+
+		/* Read local_node_id (4 bytes) */
+		local_node_id = (stream_getc(s) << 24) | (stream_getc(s) << 16) |
+		               (stream_getc(s) << 8) | stream_getc(s);
+
+		/* Read prefix_ipv6 (16 bytes) */
+		stream_get(&prefix_ipv6, s, 16);
+
+		/* Read prefix_len (1 byte) */
+		prefix_len = stream_getc(s);
+
+		/* Read seq_num (4 bytes) */
+		seq_num = (stream_getc(s) << 24) | (stream_getc(s) << 16) |
+		         (stream_getc(s) << 8) | stream_getc(s);
+
+		/* Read spf_status (1 byte) */
+		spf_status = stream_getc(s);
+
+		/* Create and process prefix NLRI */
+		struct tvr_nlri prefix_nlri;
+		prefix_nlri.type = PREFIX;
+		prefix_nlri.u.prefix_nlri.local_node = local_node_id;
+		prefix_nlri.u.prefix_nlri.prefix = prefix_ipv6;
+		prefix_nlri.u.prefix_nlri.prefixlen = prefix_len;
+		prefix_nlri.u.prefix_nlri.time_stamp = 0; /* Use current time or from packet */
+		prefix_nlri.u.prefix_nlri.attr.seq_num = seq_num;
+		prefix_nlri.u.prefix_nlri.attr.spf_status = spf_status;
+
+		/* Process the prefix NLRI in the database */
+		if (tvr_db_process(peer->bgp->db, &prefix_nlri, false)) {
+			*has_updates = true;
+
+			/* Forward to other established peers */
+			uint8_t packet_data[32];  /* 1 + 3 + 26 = 30 bytes for prefix */
+			size_t packet_size = 0;
+
+			/* TLV count (1 byte) */
+			packet_data[packet_size++] = 1;
+
+			/* TLV header for Prefix array */
+			packet_data[packet_size++] = 0x03;  /* TLV_TYPE_PREFIX_ARRAY */
+			packet_data[packet_size++] = 0x00;  /* item_count high byte */
+			packet_data[packet_size++] = 0x01;  /* item_count low byte (1 item) */
+
+			/* Prefix structure (26 bytes) */
+			write_uint32_be(packet_data + packet_size, local_node_id);
+			packet_size += 4;
+			memcpy(packet_data + packet_size, prefix_ipv6.s6_addr, 16);
+			packet_size += 16;
+			packet_data[packet_size++] = prefix_len;
+			write_uint32_be(packet_data + packet_size, seq_num);
+			packet_size += 4;
+			packet_data[packet_size++] = spf_status;
+
+			/* Forward to all established peers except the source */
+			for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
+				if (tmp_peer->connection->status == Established && tmp_peer != peer) {
+					bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE,
+					                   packet_data, packet_size);
+				}
+			}
+		}
+	}
+
+	return 0;
 }
 
 /**

@@ -68,6 +68,7 @@
 #include "bgpd/bgp_mac.h"
 #include "bgpd/bgp_flowspec.h"
 #include "bgpd/bgp_conditional_adv.h"
+#include "bgpd/bgp_tvr_spf.h"
 #ifdef ENABLE_BGP_VNC
 #include "bgpd/rfapi/bgp_rfapi_cfg.h"
 
@@ -2252,7 +2253,6 @@ DEFUN (bgp_tvrdb_add_prefix_nlri,
 	int idx = 0;
 	uint64_t local_node, time_stamp, seq_num;
 	uint8_t spf_status;
-	struct prefix_ipv6 *prefix;
 
 	if (bgp->db == NULL) {
 		vty_out(vty, "Database does not exist!\n");
@@ -2390,6 +2390,63 @@ DEFUN (bgp_tvrdb_add_self_prefix_nlri,
 	nlri.u.prefix_nlri.attr.seq_num = seq_num;
 
 	bool success = tvr_db_process(bgp->db, &nlri, false);
+
+	if (success) {
+		/* 构造TLV数据包并发送给所有已建立连接的对等体 */
+		struct listnode *node, *nnode;
+		struct peer *tmp_peer;
+
+		/* 根据define.md规范构造TLV数据包 */
+		uint8_t packet_data[32];  /* 1 + 3 + 26 = 30 bytes for prefix */
+		size_t packet_size = 0;
+
+		/* TLV count (1 byte) */
+		packet_data[packet_size++] = 1;
+
+		/* TLV header for Prefix array */
+		packet_data[packet_size++] = 0x03;  /* TLV_TYPE_PREFIX_ARRAY */
+		packet_data[packet_size++] = 0x00;  /* item_count high byte */
+		packet_data[packet_size++] = 0x01;  /* item_count low byte (1 item) */
+
+		/* Prefix structure (26 bytes) */
+		write_uint32_be(packet_data + packet_size, (uint32_t)nlri.u.prefix_nlri.local_node);
+		packet_size += 4;
+		memcpy(packet_data + packet_size, nlri.u.prefix_nlri.prefix.s6_addr, 16);
+		packet_size += 16;
+		packet_data[packet_size++] = nlri.u.prefix_nlri.prefixlen;
+		write_uint32_be(packet_data + packet_size, (uint32_t)nlri.u.prefix_nlri.attr.seq_num);
+		packet_size += 4;
+		packet_data[packet_size++] = nlri.u.prefix_nlri.attr.spf_status;
+
+		/* 发送给所有已建立连接的对等体 */
+		for (ALL_LIST_ELEMENTS(bgp->peer, node, nnode, tmp_peer)) {
+			if (tmp_peer->connection->status == Established) {
+				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE,
+				                   packet_data, packet_size);
+			}
+		}
+
+		/* 执行SPF计算 */
+		uint32_t src_router_id = bgp->router_id.s_addr;
+
+		struct tvr_spf_result spf_result = tvr_spf_execute(
+			bgp, src_router_id, 0, 0, true, true
+		);
+
+		/* 记录SPF执行结果 */
+		if (spf_result.status != TVR_SPF_SUCCESS) {
+			char debug_buf[256];
+			snprintf(debug_buf, sizeof(debug_buf),
+			         "VTY SPF execution failed with status %d for router %u\n",
+			         spf_result.status, src_router_id);
+			int fp = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+			if (fp >= 0) {
+				write(fp, debug_buf, strlen(debug_buf));
+				close(fp);
+			}
+		}
+	}
+
 	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
 
 	return CMD_SUCCESS;
@@ -20490,18 +20547,18 @@ DEFPY(sharp_tvrdb_del_prefix_nlri,
 
 
 /* TVR SPF execution result structure */
-struct tvr_spf_result {
-	int installed_count;
-	int failed_count;
-	int total_routes;
-	bool zebra_connected;
-	enum {
-		TVR_SPF_SUCCESS = 0,
-		TVR_SPF_NO_DATABASE,
-		TVR_SPF_CREATE_FAILED,
-		TVR_SPF_NO_ZEBRA
-	} status;
-};
+// struct tvr_spf_result {
+// 	int installed_count;
+// 	int failed_count;
+// 	int total_routes;
+// 	bool zebra_connected;
+// 	enum {
+// 		TVR_SPF_SUCCESS = 0,
+// 		TVR_SPF_NO_DATABASE,
+// 		TVR_SPF_CREATE_FAILED,
+// 		TVR_SPF_NO_ZEBRA
+// 	} status;
+// };
 
 /* TVR SPF API function - can be called from other modules without VTY */
 struct tvr_spf_result tvr_spf_execute(struct bgp *bgp,
