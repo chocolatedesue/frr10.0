@@ -57,6 +57,7 @@
 #include "bgpd/bgp_trace.h"
 #include "tvr_db.h"
 #include "tvr_spf.h"
+#include "bgpd/bgp_tvr_spf.h"
 
 DEFINE_HOOK(bgp_packet_dump,
 		(struct peer *peer, uint8_t type, bgp_size_t size,
@@ -3920,6 +3921,12 @@ static int bgp_process_tlv_packet(struct peer_connection *connection, struct pee
 
 	/* Log the processing result */
 	bgp_log_tlv_processing_result(peer, has_updates, debug_info);
+
+	uint32_t src_router_id = peer->bgp->router_id.s_addr;
+	
+	tvr_spf_execute(
+		peer->bgp, src_router_id, 0, 1, 1, 1
+	);
 
 	return BGP_PACKET_NOOP;
 }

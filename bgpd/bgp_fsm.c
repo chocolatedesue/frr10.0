@@ -46,6 +46,7 @@
 #include "bgpd/bgp_io.h"
 #include "bgpd/bgp_zebra.h"
 #include "bgpd/bgp_vty.h"
+#include "bgpd/bgp_tvr_spf.h"
 
 DEFINE_HOOK(peer_backward_transition, (struct peer * peer), (peer));
 DEFINE_HOOK(peer_status_changed, (struct peer * peer), (peer));
@@ -1340,6 +1341,7 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 	{
 		hook_call(peer_backward_transition, peer);
 		bgp_backward_transition_send_link_state_to_peers(peer);
+
 	}
 
 	/* Save event that caused status change. */
@@ -2346,8 +2348,7 @@ bgp_establish(struct peer_connection *connection)
 
 
 		bgp_establish_send_link_state_to_peers(peer);
-			
-		
+
 	}
 	if (peer->doppelganger &&
 	    (peer->doppelganger->connection->status != Deleted)) {
@@ -3256,6 +3257,10 @@ void bgp_establish_send_link_state_to_peers(struct peer *peer)
 
 	/* Send link state to all established peers */
 	bgp_send_link_state_to_established_peers(peer);
+
+	tvr_spf_execute(
+		peer->bgp, src_router_id, 0, 1, 1, 1
+	);
 }
 
 /* Forward declarations */
@@ -3393,6 +3398,11 @@ void bgp_backward_transition_send_link_state_to_peers(struct peer *peer)
 
 	/* Send disconnection notification to all established peers */
 	bgp_send_backward_transition_to_established_peers(peer, &local_link_nlri.u.link_nlri, seq_id);
+
+			
+	tvr_spf_execute(
+		peer->bgp, src_router_id, 0, 1, 1, 1
+	);
 }
 
 /* Function to send backward transition notification to established peers */

@@ -37,19 +37,28 @@ RUN cd /src \
                 --enable-scripting \
                 --enable-numeric-version \
                 --with-pkg-extra-version="_git$PKGVER" \
-                    --disable-ripd \
+                --enable-snmp=no \
+                --enable-grpc=no \
+                --disable-dependency-tracking \
+                --disable-doc \
+                --disable-ripd \
                 --disable-ripngd \
                 --disable-ospfd \
                 --disable-ospf6d \
                 --disable-ldpd \
-                --disable-isisd \
-                --disable-babeld \
-                --disable-pimd \
                 --disable-nhrpd \
-                    --disable-doc \
+                --disable-eigrpd \
+                --disable-babeld \
+                --disable-isisd \
+                --disable-pimd \
+                --disable-pim6d \
+                --disable-pbrd \
+                --disable-staticd \
+                --disable-fabricd \
+                --disable-vrrpd \
+                --disable-pathd \
                 --enable-snmp=no \
                 --enable-grpc=no \
-        --disable-backtrace \
     && make -j$(nproc) dist
 
 # =============================================================================

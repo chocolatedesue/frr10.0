@@ -183,6 +183,7 @@ noinst_HEADERS += \
 	bgpd/rfapi/vnc_export_bgp_p.h \
 	bgpd/rfapi/vnc_import_bgp_p.h \
 	bgpd/bgp_vnc_types.h \
+	bgpd/bgp_tvr_spf.h \
 	# end
 
 bgpd_bgpd_SOURCES = bgpd/bgp_main.c
