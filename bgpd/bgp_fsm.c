@@ -106,6 +106,60 @@ int bgp_peer_reg_with_nht(struct peer *peer)
 				       NULL);
 }
 
+/* Helper function to write 16-bit big-endian */
+static void write_uint16_be(uint8_t *buffer, uint16_t value)
+{
+	buffer[0] = (value >> 8) & 0xFF;
+	buffer[1] = value & 0xFF;
+}
+
+/* Helper function to convert IPv4 to IPv6 mapped address */
+static void ipv4_to_ipv6_mapped(struct in6_addr *ipv6_addr, struct in_addr ipv4_addr)
+{
+	memset(ipv6_addr, 0, sizeof(*ipv6_addr));
+	ipv6_addr->s6_addr[10] = 0xff;
+	ipv6_addr->s6_addr[11] = 0xff;
+	memcpy(&ipv6_addr->s6_addr[12], &ipv4_addr, 4);
+}
+
+/* Helper function to create TLV packet according to define.md specification */
+static size_t create_tlv_packet(uint8_t *buffer, uint8_t tlv_count,
+                                struct tvr_link_nlri **link_nlris, size_t nlri_count)
+{
+	size_t offset = 0;
+
+	/* Write TLV count (1 byte) */
+	buffer[offset++] = tlv_count;
+
+	/* Write TLV header for Link array */
+	buffer[offset++] = 0x02;  /* TLV_TYPE_LINK_ARRAY */
+	write_uint16_be(buffer + offset, (uint16_t)nlri_count);  /* item_count */
+	offset += 2;
+
+	/* Write Link structures (28 bytes each according to define.md) */
+	for (size_t i = 0; i < nlri_count; i++) {
+		struct tvr_link_nlri *link_nlri = link_nlris[i];
+
+		/* local_node_id (4 bytes) */
+		write_uint32_be(buffer + offset, link_nlri->local_node);
+		offset += 4;
+
+		/* remote_node_id (4 bytes) */
+		write_uint32_be(buffer + offset, link_nlri->remote_node);
+		offset += 4;
+
+		/* peer_link_local_ipv6 (16 bytes) */
+		memcpy(buffer + offset, link_nlri->link_addr.s6_addr, 16);
+		offset += 16;
+
+		/* ifindex (4 bytes) */
+		write_uint32_be(buffer + offset, link_nlri->ifindex);
+		offset += 4;
+	}
+
+	return offset;
+}
+
 static void peer_xfer_stats(struct peer *peer_dst, struct peer *peer_src)
 {
 	/* Copy stats over. These are only the pre-established state stats */
@@ -1284,99 +1338,9 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 	if (connection->ostatus == Established &&
 	    connection->status != Established)
 	{
-		struct listnode *node, *nnode;
-		struct peer *tmp_peer;
 		hook_call(peer_backward_transition, peer);
-		uint64_t seq_id = generate_simple_id(peer->bgp->id_gen);
-		
-		// Phase 1: Insert link state into database first
-		struct tvr_nlri local_node_nlri, remote_node_nlri;
-		local_node_nlri.type = NODE, remote_node_nlri.type = NODE;
-		uint32_t src_router_id = peer->bgp->router_id.s_addr;
-		uint32_t dst_router_id = peer->remote_id.s_addr;
-
-		// tvr_db_assign_node_nlri(
-		// 	&local_node_nlri.u.node_nlri, src_router_id, 0, 0, seq_id);
-		// tvr_db_assign_node_nlri(
-		// 	&remote_node_nlri.u.node_nlri, dst_router_id, 0, 0, seq_id);
-		// tvr_db_process(peer->bgp->db, &local_node_nlri, false);
-		// tvr_db_process(peer->bgp->db, &remote_node_nlri, false);
-
-				struct in6_addr peer_addr_v6 = IN6ADDR_ANY_INIT;
-		if (peer -> connection->su.sa.sa_family == AF_INET) {
-			// IPv4映射到IPv6
-			memset(&peer_addr_v6, 0, sizeof(peer_addr_v6));
-			peer_addr_v6.s6_addr[10] = 0xff;
-			peer_addr_v6.s6_addr[11] = 0xff;
-			memcpy(&peer_addr_v6.s6_addr[12], &peer -> connection->su.sin.sin_addr, 4);
-		} else if (peer -> connection->su.sa.sa_family == AF_INET6) {
-			peer_addr_v6 = peer -> connection->su.sin6.sin6_addr;
-		}
-
-
-		struct tvr_nlri local_link_nlri;
-		local_link_nlri.type = LINK;
-		tvr_db_assign_link_nlri(
-			&local_link_nlri.u.link_nlri, src_router_id, dst_router_id, peer_addr_v6,
-			0, 1, 1, seq_id, peer -> ifp -> ifindex);
-		tvr_db_process(peer->bgp->db, &local_link_nlri, false);
-
-		// Phase 2: Prepare batch format for single NLRI (consistent with bgp_establish)
-		uint8_t data[8 + 39];
-		const uint64_t num = 1;
-		int offset = 8;
-
-		write_uint64_be(data, num); 
-		write_uint32_be(data + 8, src_router_id);
-		write_uint32_be(data + 12, dst_router_id);
-		
-		data[offset + 8] = 0x02; // TLV Type for IPv6
-		data[offset + 9]= 16;// TLV Length
-		memcpy(data + offset + 10, local_link_nlri.u.link_nlri.link_addr.s6_addr, 16);
-
-		write_uint64_be(data + offset + 26, seq_id);
-		data[34 + offset] = 0x01;  // spf_status = 0 (disconnected)
-		write_uint32_be ( data + offset + 35, peer -> ifp -> ifindex); 
-
-		int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND , 0666);
-
-		// Phase 3: Traverse peers and send notifications
-		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
-			/* Check peer connection status */
-			if (tmp_peer->connection->status == Established) {
-				// tmp_peer->is_flip = 1;
-				// tmp_peer->final_flip_state = 0;
-				// tmp_peer->final_remote_id = tmp_peer ->remote_id.s_addr;
-				/* Use debug_buf to write to file */
-				char debug_buf[400];
-				char bgp_router_id_str[INET_ADDRSTRLEN], bgp_final_remote_id_str[INET_ADDRSTRLEN],remote_is_str[INET_ADDRSTRLEN];
-
-				inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, bgp_router_id_str,
-						sizeof(bgp_router_id_str));
-				inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr, bgp_final_remote_id_str,
-						sizeof(bgp_final_remote_id_str));
-				inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_is_str,
-						sizeof(remote_is_str));
-				
-				sprintf(debug_buf, "BGP [%s] IDEL; walk connected peer [%s]: "
-        "remote_id_str: %s, seq_id %llu\n",
-			bgp_router_id_str, bgp_final_remote_id_str, remote_is_str, seq_id);
-
-				if (fp1 != -1) {
-					ssize_t bytes_written = write(fp1, debug_buf, strlen(debug_buf));
-					(void)bytes_written;
-					
-				}
-
-				
-				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, data, sizeof data);
-
-				// bgp_writes_on(tmp_peer->connection);
-			}
-		}
-
-		close(fp1);
-	}	
+		bgp_backward_transition_send_link_state_to_peers(peer);
+	}
 
 	/* Save event that caused status change. */
 	peer->last_major_event = peer->cur_event;
@@ -2381,152 +2345,7 @@ bgp_establish(struct peer_connection *connection)
 			     0);
 
 
-		char bgp_router_id_str[INET_ADDRSTRLEN];
-		inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
-			  bgp_router_id_str, sizeof(bgp_router_id_str));
-		
-
-
-		// struct tvr_nlri nlri;
-		// nlri.type = NODE;
-		uint64_t seq_id = generate_simple_id(peer -> bgp->id_gen	);
-		
-	
-		struct tvr_nlri local_node_nlri, remote_node_nlri;
-		
-		local_node_nlri.type = NODE, remote_node_nlri.type = NODE;
-		uint32_t src_router_id = peer->bgp->router_id.s_addr;
-		uint32_t dst_router_id = peer->remote_id.s_addr;
-
-		// char addr_str[SU_ADDRSTRLEN];
-		// sockunion2str(peer_addr, addr_str, sizeof(addr_str));
-
-				
-		struct in6_addr peer_addr_v6 = IN6ADDR_ANY_INIT;
-		if (peer -> connection->su.sa.sa_family == AF_INET) {
-			// IPv4映射到IPv6
-			memset(&peer_addr_v6, 0, sizeof(peer_addr_v6));
-			peer_addr_v6.s6_addr[10] = 0xff;
-			peer_addr_v6.s6_addr[11] = 0xff;
-			memcpy(&peer_addr_v6.s6_addr[12], &peer -> connection->su.sin.sin_addr, 4);
-		} else if (peer -> connection->su.sa.sa_family == AF_INET6) {
-			peer_addr_v6 = peer -> connection->su.sin6.sin6_addr;
-		}
-
-		tvr_db_assign_node_nlri(
-			&local_node_nlri.u.node_nlri, src_router_id, 0, 0, seq_id);
-		tvr_db_assign_node_nlri(
-			&remote_node_nlri.u.node_nlri, dst_router_id, 0, 0 , seq_id);
-		tvr_db_process(peer -> bgp -> db, &local_node_nlri, false);
-		tvr_db_process(peer -> bgp -> db, &remote_node_nlri, false);
-
-		struct tvr_nlri local_link_nlri;
-		local_link_nlri.type = LINK;
-		
-		tvr_db_assign_link_nlri(
-			&local_link_nlri.u.link_nlri, src_router_id, dst_router_id, peer_addr_v6,
-			0, 1, 0, seq_id, peer->ifp->ifindex);
-		tvr_db_process(peer -> bgp -> db, &local_link_nlri, false);
-
-		
-		struct listnode *node, *nnode;
-		struct peer *tmp_peer;
-
-		const uint64_t link_nlri_len = lnlri_rb_count(&peer -> bgp -> db->lnlri_rb_root);
-
-		// 每个NLRI: 4(local_node) + 4(remote_node) + 18(TLV:2+16) + 8(seq_num) + 1(spf_status) = 35字节
-		uint8_t data[link_nlri_len * 39 + 8];
-		write_uint64_be(data, link_nlri_len);
-
-		struct tvr_link_nlri *link_nlri;
-		int idx = 0;
-		frr_each_safe(lnlri_rb, &peer -> bgp -> db->lnlri_rb_root, link_nlri) {
-			size_t offset = 8 + idx * 39;
-			
-			// 写入 local_node 和 remote_node
-			write_uint32_be(data + offset, link_nlri->local_node);
-			write_uint32_be(data + offset + 4, link_nlri->remote_node);
-			
-			// 写入TLV格式的IPv6地址 (Type=0x02, Length=16, Value=16字节)
-			data[offset + 8] = 0x02;  // TLV Type for IPv6
-			data[offset + 9] = 16;    // TLV Length
-			memcpy(data + offset + 10, link_nlri->link_addr.s6_addr, 16);
-			
-			// 写入 seq_num 和 spf_status
-			write_uint64_be(data + offset + 26, link_nlri->attr.seq_num);
-			data[offset + 34] = link_nlri->attr.spf_status;
-			write_uint32_be( data + offset + 35, peer -> ifp ->ifindex);
-			idx++;
-		}
-
-		int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND,0666 );
-
-
-		/* Iterate through all peers in the BGP instance */
-		for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
-			/* Check peer connection status */
-
-			if (tmp_peer->connection->status == Established) {
-				/* Use debug_buf to write to file */
-				char debug_buf[512];  /* Increased buffer size */
-				char tmp_peer_remote_id_str[INET_ADDRSTRLEN];
-
-				inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, bgp_router_id_str,
-						sizeof(bgp_router_id_str));
-				inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr, tmp_peer_remote_id_str,
-						sizeof(tmp_peer_remote_id_str));
-
-				/* Fixed format specifiers and variable names */
-				snprintf(debug_buf, sizeof(debug_buf), 
-						"BGP [%s] established; connedted peer: [%s]"
-						"local_as: %u, remote_as %u\n",
-						bgp_router_id_str, tmp_peer_remote_id_str,
-						(unsigned int)peer->bgp->as, (unsigned int)tmp_peer->as);
-
-				
-				if (fp1 != -1) {
-					write(fp1, debug_buf, strlen(debug_buf));
-				}
-
-				// 分批发送link_state消息，每批最多60个
-				const uint64_t MAX_BATCH_SIZE = 60;
-				uint64_t remaining_count = link_nlri_len;
-				uint64_t current_batch_start = 0;
-				
-				while (remaining_count > 0) {
-					// 计算当前批次的大小
-					uint64_t current_batch_size = (remaining_count > MAX_BATCH_SIZE) ? MAX_BATCH_SIZE : remaining_count;
-					
-					// 创建当前批次的数据包
-					uint8_t batch_data[8 + current_batch_size * 39];
-					write_uint64_be(batch_data, current_batch_size);
-					
-					// 复制当前批次的数据
-					memcpy(batch_data + 8, data + 8 + current_batch_start * 39, current_batch_size * 39);
-					
-					// 发送当前批次
-					bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, batch_data, sizeof(batch_data));
-
-					// bgp_writes_on(tmp_peer->connection);
-					
-					// 记录批次发送信息
-					char batch_buf[256];
-					snprintf(batch_buf, sizeof(batch_buf),
-					 "[%s] send establish batch to [%s], batch_size: %llu, remaining: %llu\n",
-					 bgp_router_id_str, tmp_peer_remote_id_str,
-					 (unsigned long long)current_batch_size, (unsigned long long)(remaining_count - current_batch_size));
-					if (fp1 != -1) {
-						write(fp1, batch_buf, strlen(batch_buf));
-					}
-					
-					// 更新计数器
-					current_batch_start += current_batch_size;
-					remaining_count -= current_batch_size;
-				}
-				
-			}
-		}
-		close(fp1);
+		bgp_establish_send_link_state_to_peers(peer);
 			
 		
 	}
@@ -3394,5 +3213,241 @@ void bgp_peer_gr_flags_update(struct peer *peer)
 				"[BGP_GR] Peer %s UNSET PEER_STATUS_NSF_WAIT!",
 				peer->host);
 		}
+	}
+}
+
+/* Function to send link state information to all established peers */
+void bgp_establish_send_link_state_to_peers(struct peer *peer)
+{
+	char bgp_router_id_str[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &peer->bgp->router_id.s_addr,
+		  bgp_router_id_str, sizeof(bgp_router_id_str));
+
+	/* Generate sequence ID */
+	uint64_t seq_id = generate_simple_id(peer->bgp->id_gen);
+
+	/* Create and process node NLRIs */
+	struct tvr_nlri local_node_nlri, remote_node_nlri;
+	local_node_nlri.type = NODE;
+	remote_node_nlri.type = NODE;
+	uint32_t src_router_id = peer->bgp->router_id.s_addr;
+	uint32_t dst_router_id = peer->remote_id.s_addr;
+
+	/* Convert peer address to IPv6 format */
+	struct in6_addr peer_addr_v6 = IN6ADDR_ANY_INIT;
+	if (peer->connection->su.sa.sa_family == AF_INET) {
+		ipv4_to_ipv6_mapped(&peer_addr_v6, peer->connection->su.sin.sin_addr);
+	} else if (peer->connection->su.sa.sa_family == AF_INET6) {
+		peer_addr_v6 = peer->connection->su.sin6.sin6_addr;
+	}
+
+	/* Assign and process node NLRIs */
+	tvr_db_assign_node_nlri(&local_node_nlri.u.node_nlri, src_router_id, 0, 0, seq_id);
+	tvr_db_assign_node_nlri(&remote_node_nlri.u.node_nlri, dst_router_id, 0, 0, seq_id);
+	tvr_db_process(peer->bgp->db, &local_node_nlri, false);
+	tvr_db_process(peer->bgp->db, &remote_node_nlri, false);
+
+	/* Create and process link NLRI */
+	struct tvr_nlri local_link_nlri;
+	local_link_nlri.type = LINK;
+	tvr_db_assign_link_nlri(&local_link_nlri.u.link_nlri, src_router_id, dst_router_id,
+	                        peer_addr_v6, 0, 1, 0, seq_id, peer->ifp->ifindex);
+	tvr_db_process(peer->bgp->db, &local_link_nlri, false);
+
+	/* Send link state to all established peers */
+	bgp_send_link_state_to_established_peers(peer);
+}
+
+/* Forward declarations */
+static void bgp_send_batched_link_state(struct peer *source_peer, struct peer *target_peer,
+                                        struct tvr_link_nlri **link_nlris, size_t total_count, int debug_fd);
+static void bgp_send_backward_transition_to_established_peers(struct peer *source_peer,
+                                                             struct tvr_link_nlri *link_nlri,
+                                                             uint64_t seq_id);
+
+/* Function to send link state to all established peers with batching */
+void bgp_send_link_state_to_established_peers(struct peer *peer)
+{
+	struct listnode *node, *nnode;
+	struct peer *tmp_peer;
+	const uint64_t link_nlri_len = lnlri_rb_count(&peer->bgp->db->lnlri_rb_root);
+
+	if (link_nlri_len == 0) {
+		return;  /* No link NLRIs to send */
+	}
+
+	/* Collect all link NLRIs into an array for easier processing */
+	struct tvr_link_nlri **link_nlris = XCALLOC(MTYPE_TMP,
+	                                            sizeof(struct tvr_link_nlri *) * link_nlri_len);
+	struct tvr_link_nlri *link_nlri;
+	size_t idx = 0;
+
+	frr_each_safe(lnlri_rb, &peer->bgp->db->lnlri_rb_root, link_nlri) {
+		link_nlris[idx++] = link_nlri;
+	}
+
+	/* Open debug file */
+	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+
+	/* Iterate through all peers in the BGP instance */
+	for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
+		if (tmp_peer->connection->status == Established) {
+			bgp_send_batched_link_state(peer, tmp_peer, link_nlris, link_nlri_len, fp1);
+		}
+	}
+
+	/* Cleanup */
+	XFREE(MTYPE_TMP, link_nlris);
+	if (fp1 != -1) {
+		close(fp1);
+	}
+}
+
+/* Function to send link state in batches according to TLV specification */
+static void bgp_send_batched_link_state(struct peer *source_peer, struct peer *target_peer,
+                                        struct tvr_link_nlri **link_nlris, size_t total_count, int debug_fd)
+{
+	const size_t MAX_BATCH_SIZE = 60;
+	size_t remaining_count = total_count;
+	size_t current_batch_start = 0;
+
+	char bgp_router_id_str[INET_ADDRSTRLEN];
+	char target_peer_remote_id_str[INET_ADDRSTRLEN];
+
+	inet_ntop(AF_INET, &source_peer->bgp->router_id.s_addr, bgp_router_id_str,
+	          sizeof(bgp_router_id_str));
+	inet_ntop(AF_INET, &target_peer->remote_id.s_addr, target_peer_remote_id_str,
+	          sizeof(target_peer_remote_id_str));
+
+	/* Log initial connection info */
+	if (debug_fd != -1) {
+		char debug_buf[512];
+		snprintf(debug_buf, sizeof(debug_buf),
+		         "BGP [%s] established; connected peer: [%s] local_as: %u, remote_as %u\n",
+		         bgp_router_id_str, target_peer_remote_id_str,
+		         (unsigned int)source_peer->bgp->as, (unsigned int)target_peer->as);
+		write(debug_fd, debug_buf, strlen(debug_buf));
+	}
+
+	while (remaining_count > 0) {
+		/* Calculate current batch size */
+		size_t current_batch_size = (remaining_count > MAX_BATCH_SIZE) ? MAX_BATCH_SIZE : remaining_count;
+
+		/* Create TLV packet according to define.md specification */
+		/* TLV packet: 1 byte (tlv_count) + 3 bytes (TLV header) + 28 * batch_size bytes (Link data) */
+		size_t packet_size = 1 + 3 + (28 * current_batch_size);
+		uint8_t *batch_data = XCALLOC(MTYPE_TMP, packet_size);
+
+		/* Create array of current batch link NLRIs */
+		struct tvr_link_nlri **batch_nlris = &link_nlris[current_batch_start];
+
+		/* Create TLV packet */
+		size_t actual_size = create_tlv_packet(batch_data, 1, batch_nlris, current_batch_size);
+
+		/* Send current batch */
+		bgp_link_state_send(target_peer->connection, BGP_MSG_LINK_STATE, batch_data, actual_size);
+
+		/* Log batch sending info */
+		if (debug_fd != -1) {
+			char batch_buf[256];
+			snprintf(batch_buf, sizeof(batch_buf),
+			         "[%s] send establish batch to [%s], batch_size: %zu, remaining: %zu\n",
+			         bgp_router_id_str, target_peer_remote_id_str,
+			         current_batch_size, remaining_count - current_batch_size);
+			write(debug_fd, batch_buf, strlen(batch_buf));
+		}
+
+		/* Update counters */
+		current_batch_start += current_batch_size;
+		remaining_count -= current_batch_size;
+
+		/* Cleanup batch data */
+		XFREE(MTYPE_TMP, batch_data);
+	}
+}
+
+/* Function to handle backward transition link state updates */
+void bgp_backward_transition_send_link_state_to_peers(struct peer *peer)
+{
+	/* Generate sequence ID */
+	uint64_t seq_id = generate_simple_id(peer->bgp->id_gen);
+
+	/* Get router IDs */
+	uint32_t src_router_id = peer->bgp->router_id.s_addr;
+	uint32_t dst_router_id = peer->remote_id.s_addr;
+
+	/* Convert peer address to IPv6 format */
+	struct in6_addr peer_addr_v6 = IN6ADDR_ANY_INIT;
+	if (peer->connection->su.sa.sa_family == AF_INET) {
+		ipv4_to_ipv6_mapped(&peer_addr_v6, peer->connection->su.sin.sin_addr);
+	} else if (peer->connection->su.sa.sa_family == AF_INET6) {
+		peer_addr_v6 = peer->connection->su.sin6.sin6_addr;
+	}
+
+	/* Create and process link NLRI with disconnected status */
+	struct tvr_nlri local_link_nlri;
+	local_link_nlri.type = LINK;
+	tvr_db_assign_link_nlri(&local_link_nlri.u.link_nlri, src_router_id, dst_router_id,
+	                        peer_addr_v6, 0, 1, 1, seq_id, peer->ifp->ifindex);  /* spf_status = 1 (disconnected) */
+	tvr_db_process(peer->bgp->db, &local_link_nlri, false);
+
+	/* Send disconnection notification to all established peers */
+	bgp_send_backward_transition_to_established_peers(peer, &local_link_nlri.u.link_nlri, seq_id);
+}
+
+/* Function to send backward transition notification to established peers */
+static void bgp_send_backward_transition_to_established_peers(struct peer *source_peer,
+                                                             struct tvr_link_nlri *link_nlri,
+                                                             uint64_t seq_id)
+{
+	struct listnode *node, *nnode;
+	struct peer *tmp_peer;
+
+	/* Create TLV packet for single link NLRI according to define.md specification */
+	/* Packet size: 1 byte (tlv_count) + 3 bytes (TLV header) + 28 bytes (Link data) */
+	uint8_t packet_data[32];  /* 1 + 3 + 28 = 32 bytes */
+
+	/* Create array with single link NLRI */
+	struct tvr_link_nlri *single_link[] = { link_nlri };
+	size_t packet_size = create_tlv_packet(packet_data, 1, single_link, 1);
+
+	/* Open debug file */
+	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+
+	/* Get router ID strings for logging */
+	char bgp_router_id_str[INET_ADDRSTRLEN];
+	char remote_id_str[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &source_peer->bgp->router_id.s_addr, bgp_router_id_str,
+	          sizeof(bgp_router_id_str));
+	inet_ntop(AF_INET, &source_peer->remote_id.s_addr, remote_id_str,
+	          sizeof(remote_id_str));
+
+	/* Send to all established peers */
+	for (ALL_LIST_ELEMENTS(source_peer->bgp->peer, node, nnode, tmp_peer)) {
+		if (tmp_peer->connection->status == Established) {
+			/* Send TLV packet */
+			bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, packet_data, packet_size);
+
+			/* Log the disconnection notification */
+			if (fp1 != -1) {
+				char debug_buf[400];
+				char target_remote_id_str[INET_ADDRSTRLEN];
+
+				inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr, target_remote_id_str,
+				          sizeof(target_remote_id_str));
+
+				snprintf(debug_buf, sizeof(debug_buf),
+				         "BGP [%s] IDLE; walk connected peer [%s]: remote_id_str: %s, seq_id %llu\n",
+				         bgp_router_id_str, target_remote_id_str, remote_id_str,
+				         (unsigned long long)seq_id);
+
+				write(fp1, debug_buf, strlen(debug_buf));
+			}
+		}
+	}
+
+	/* Cleanup */
+	if (fp1 != -1) {
+		close(fp1);
 	}
 }

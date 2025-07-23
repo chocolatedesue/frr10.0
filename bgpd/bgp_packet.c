@@ -3835,163 +3835,244 @@ static inline uint64_t read_uint64_be(const uint8_t *data) {
 static bool should_process_nlri(struct tvr_link_nlri* existing, uint64_t seq_num, uint8_t spf_status);
 static void forward_to_peers_optimized(struct peer *source_peer, uint8_t *nlri_data, bool *nlri_processed, uint64_t nlri_count);
 
+/* TLV packet processing functions */
+static int bgp_process_tlv_packet(struct peer_connection *connection, struct peer *peer, bgp_size_t size);
+static int bgp_process_tlv_link_array(struct peer *peer, struct stream *s, uint16_t item_count,
+                                     bool *has_updates, char *debug_info, size_t debug_info_size);
+static int bgp_process_single_link_nlri(struct peer *peer, struct stream *s,
+                                       uint32_t local_node, uint32_t remote_node,
+                                       struct in6_addr *peer_addr_v6, uint32_t ifindex);
+static uint16_t read_uint16_be(struct stream *s);
+static void bgp_log_tlv_processing_result(struct peer *peer, bool has_updates, const char *debug_info);
+static void bgp_forward_tlv_link_to_peers(struct peer *source_peer, struct tvr_link_nlri *link_nlri);
+
 int bgp_link_state_receive(struct peer_connection *connection,
 				 struct peer *peer, bgp_size_t size)
 {
-	struct stream *s;
-	uint64_t link_nlri_count;
-	char debug_buf[512];
-	char local_router_id_str[INET_ADDRSTRLEN], remote_router_id_str[INET_ADDRSTRLEN];
-	bool has_updates = false;  // 简化：只保留一个关键状态变量
+	return bgp_process_tlv_packet(connection, peer, size);
+}
 
-	s = peer->curr;
+/* Helper function to read 16-bit big-endian from stream */
+static uint16_t read_uint16_be(struct stream *s)
+{
+	uint16_t value = 0;
+	value = (stream_getc(s) << 8);
+	value |= stream_getc(s);
+	return value;
+}
 
-	// 记录数据开始位置（已经跳过了 BGP 头部）
-	size_t data_start_pos = stream_get_getp(s);
+/* Main TLV packet processing function according to define.md specification */
+static int bgp_process_tlv_packet(struct peer_connection *connection, struct peer *peer, bgp_size_t size)
+{
+	struct stream *s = peer->curr;
+	bool has_updates = false;
+	char debug_info[512] = {0};
 
-	// 首先读取 Link NLRI 数量（8字节）
-	link_nlri_count = stream_getq(s);
+	/* Read TLV count (1 byte) */
+	uint8_t tlv_count = stream_getc(s);
 
-	if (link_nlri_count == 0) {
+	if (tlv_count == 0) {
 		return BGP_PACKET_NOOP;
 	}
 
-	// 创建处理结果数组和数据存储，避免重复循环
-	bool *nlri_processed = calloc(link_nlri_count, sizeof(bool));
-	uint8_t *nlri_data = malloc(link_nlri_count * 39);  // 存储所有NLRI的原始数据
+	/* Process each TLV */
+	for (uint8_t i = 0; i < tlv_count; i++) {
+		/* Read TLV header */
+		uint8_t tlv_type = stream_getc(s);
+		uint16_t item_count = read_uint16_be(s);
 
-	// 一次循环：处理NLRI并记录结果
-	for (uint64_t i = 0; i < link_nlri_count; i++) {
-		uint32_t local_node, remote_node;
-		uint64_t seq_num;
-		uint8_t spf_status;
+		switch (tlv_type) {
+		case 0x01: /* TLV_TYPE_NODE_ARRAY */
+			/* Log node array but don't process */
+			snprintf(debug_info + strlen(debug_info), sizeof(debug_info) - strlen(debug_info),
+			         "Node array (type=0x01, count=%u) - logged only. ", item_count);
 
-		// 记录当前位置，用于存储原始数据
-		size_t nlri_start_pos = stream_get_getp(s);
+			/* Skip node data: item_count * 9 bytes per node */
+			stream_forward_getp(s, item_count * 9);
+			break;
 
-		local_node = stream_getl(s);
-		remote_node = stream_getl(s);
-
-		uint8_t ip_type, ip_tlv_len;
-		ip_type = stream_getc(s);
-		ip_tlv_len = stream_getc(s);
-		uint8_t ipv6_addr[16];
-		for (int j = 0; j < ip_tlv_len; j++) {
-			ipv6_addr[j] = stream_getc(s);
-		}
-		seq_num = stream_getq(s);
-		spf_status = stream_getc(s);
-		ifindex_t ifindex = stream_getl(s);
-
-		// 存储原始NLRI数据用于转发
-		size_t nlri_end_pos = stream_get_getp(s);
-		stream_set_getp(s, nlri_start_pos);
-		stream_get(nlri_data + i * 39, s, 39);
-		stream_set_getp(s, nlri_end_pos);
-
-		// 创建用于查找的 Link NLRI
-		struct tvr_nlri rec_link_nlri;
-		rec_link_nlri.type = LINK;
-
-		struct in6_addr peer_addr_v6 = IN6ADDR_ANY_INIT;
-
-		if (ip_type == 0x02) { // IPv6
-			for (int j = 0; j < 16; j++) {
-				peer_addr_v6.s6_addr[j] = ipv6_addr[j];
+		case 0x02: /* TLV_TYPE_LINK_ARRAY */
+			/* Process link array */
+			if (bgp_process_tlv_link_array(peer, s, item_count, &has_updates,
+			                              debug_info, sizeof(debug_info)) < 0) {
+				return BGP_Stop;
 			}
-		}
+			break;
 
-		tvr_db_assign_link_nlri(
-			&rec_link_nlri.u.link_nlri, local_node, remote_node, peer_addr_v6,
-			0, 1, spf_status, seq_num, ifindex);
+		case 0x03: /* TLV_TYPE_PREFIX_ARRAY */
+			/* Log prefix array but don't process */
+			snprintf(debug_info + strlen(debug_info), sizeof(debug_info) - strlen(debug_info),
+			         "Prefix array (type=0x03, count=%u) - logged only. ", item_count);
 
-		// 查找数据库中是否存在相同的 NLRI
-		struct tvr_link_nlri* existing_nlri = lnlri_rb_find(
-			&peer->bgp->db->lnlri_rb_root, &rec_link_nlri.u.link_nlri);
+			/* Skip prefix data: item_count * 26 bytes per prefix */
+			stream_forward_getp(s, item_count * 26);
+			break;
 
-		// 判断是否需要处理
-		if (should_process_nlri(existing_nlri, seq_num, spf_status)) {
-			// 处理 Link NLRI
-			tvr_db_process(peer->bgp->db, &rec_link_nlri, false);
+		default:
+			/* Unknown TLV type */
+			snprintf(debug_info + strlen(debug_info), sizeof(debug_info) - strlen(debug_info),
+			         "Unknown TLV type=0x%02x, count=%u - skipped. ", tlv_type, item_count);
 
-			// 创建并处理对应的 Node NLRI
-			struct tvr_nlri local_node_nlri, remote_node_nlri;
-
-			local_node_nlri.type = NODE;
-			remote_node_nlri.type = NODE;
-			tvr_db_assign_node_nlri(
-				&local_node_nlri.u.node_nlri, local_node, 0, 0, seq_num);
-			tvr_db_assign_node_nlri(
-				&remote_node_nlri.u.node_nlri, remote_node, 0, 0, seq_num);
-			tvr_db_process(peer->bgp->db, &local_node_nlri, false);
-			tvr_db_process(peer->bgp->db, &remote_node_nlri, false);
-
-			// 标记为已处理，可以转发
-			nlri_processed[i] = true;
-			has_updates = true;
+			/* We don't know the size, this is an error */
+			return BGP_Stop;
 		}
 	}
 
-	// 获取第一个 NLRI 的信息用于日志记录
-	uint32_t first_local_node = 0, first_remote_node = 0;
-	uint8_t first_spf_status = 0;
+	/* Log the processing result */
+	bgp_log_tlv_processing_result(peer, has_updates, debug_info);
 
-	if (link_nlri_count > 0) {
-		// 重新定位到第一个 NLRI 的位置（data_start_pos + 8字节的计数）
-		stream_set_getp(s, data_start_pos + 8);
-		first_local_node = stream_getl(s);
-		first_remote_node = stream_getl(s);
+	return BGP_PACKET_NOOP;
+}
 
-		// 正确跳过TLV格式的IPv6地址
-		uint8_t ip_type = stream_getc(s);
-		uint8_t ip_tlv_len = stream_getc(s);
-		stream_forward_getp(s, ip_tlv_len);  // 跳过实际长度的IPv6数据
+/* Function to log TLV processing results */
+static void bgp_log_tlv_processing_result(struct peer *peer, bool has_updates, const char *debug_info)
+{
+	char local_router_id_str[INET_ADDRSTRLEN];
+	char remote_router_id_str[INET_ADDRSTRLEN];
+	char debug_buf[1024];
 
-		// 跳过 seq_num (8字节)，然后读取 spf_status
-		stream_forward_getp(s, 8);
-		first_spf_status = stream_getc(s);
-	}
-
-	char first_local_node_str[INET_ADDRSTRLEN], first_remote_node_str[INET_ADDRSTRLEN];
-	inet_ntop(AF_INET, &first_local_node, first_local_node_str, INET_ADDRSTRLEN);
-	inet_ntop(AF_INET, &first_remote_node, first_remote_node_str, INET_ADDRSTRLEN);
 	inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, local_router_id_str, INET_ADDRSTRLEN);
 	inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_router_id_str, INET_ADDRSTRLEN);
 
-	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND , 0666);
+	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
 
-	// 简化的处理结果判断 - 删除本地路由发出的判断
-	if (!has_updates) {
+	if (has_updates) {
 		snprintf(debug_buf, sizeof(debug_buf),
-		 "[%s] rcv duplicate LINKSTATE from [%s], count: %llu, first_local: %s, first_remote: %s, first_spf_status: %u\n",
-		 local_router_id_str, remote_router_id_str, (unsigned long long)link_nlri_count,
-		 first_local_node_str, first_remote_node_str, first_spf_status);
-		 write(fp1, debug_buf, strlen(debug_buf));
-
+		         "[%s] rcv New TLV LINKSTATE from [%s]: %s\n",
+		         local_router_id_str, remote_router_id_str, debug_info);
 	} else {
-
-		// struct tvr_spf *spf  = tvr_spf_create(peer -> bgp->db, peer -> bgp -> router_id.s_addr , 0, 0);
-
 		snprintf(debug_buf, sizeof(debug_buf),
-		 "[%s] rcv New LINKSTATE from [%s], count: %llu, first_local: %s, first_remote: %s, first_spf_status: %u\n",
-		local_router_id_str, remote_router_id_str, (unsigned long long)link_nlri_count,
-		first_local_node_str, first_remote_node_str, first_spf_status);
-
-		write(fp1, debug_buf, strlen(debug_buf));
-
-		// 简化的转发逻辑
-		forward_to_peers_optimized(peer, nlri_data, nlri_processed, link_nlri_count);
+		         "[%s] rcv TLV packet from [%s]: %s\n",
+		         local_router_id_str, remote_router_id_str, debug_info);
 	}
 
-	// 清理内存
-	free(nlri_processed);
-	free(nlri_data);
+	if (fp1 != -1) {
+		write(fp1, debug_buf, strlen(debug_buf));
+		close(fp1);
+	}
+}
 
-	close(fp1);
+/* Function to process TLV Link array according to define.md specification */
+static int bgp_process_tlv_link_array(struct peer *peer, struct stream *s, uint16_t item_count,
+                                     bool *has_updates, char *debug_info, size_t debug_info_size)
+{
+	uint32_t processed_count = 0;
+	uint32_t updated_count = 0;
 
+	for (uint16_t i = 0; i < item_count; i++) {
+		/* Read Link structure (28 bytes according to define.md) */
+		uint32_t local_node_id = stream_getl(s);     /* 4 bytes */
+		uint32_t remote_node_id = stream_getl(s);    /* 4 bytes */
 
-	return BGP_PACKET_NOOP;
+		/* Read peer_link_local_ipv6 (16 bytes) */
+		struct in6_addr peer_addr_v6;
+		stream_get(peer_addr_v6.s6_addr, s, 16);
 
+		uint32_t ifindex = stream_getl(s);           /* 4 bytes */
+
+		/* Process this link NLRI */
+		int result = bgp_process_single_link_nlri(peer, s, local_node_id, remote_node_id,
+		                                         &peer_addr_v6, ifindex);
+		if (result > 0) {
+			updated_count++;
+			*has_updates = true;
+		} else if (result < 0) {
+			return -1;  /* Error occurred */
+		}
+
+		processed_count++;
+	}
+
+	/* Update debug info */
+	snprintf(debug_info + strlen(debug_info), debug_info_size - strlen(debug_info),
+	         "Link array (type=0x02, count=%u, processed=%u, updated=%u). ",
+	         item_count, processed_count, updated_count);
+
+	return 0;
+}
+
+/* Function to process a single Link NLRI */
+static int bgp_process_single_link_nlri(struct peer *peer, struct stream *s,
+                                       uint32_t local_node, uint32_t remote_node,
+                                       struct in6_addr *peer_addr_v6, uint32_t ifindex)
+{
+	/* Generate sequence number for this update */
+	uint64_t seq_num = generate_simple_id(peer->bgp->id_gen);
+	uint8_t spf_status = 0;  /* Default status: enabled */
+
+	/* Create Link NLRI for database lookup */
+	struct tvr_nlri rec_link_nlri;
+	rec_link_nlri.type = LINK;
+
+	tvr_db_assign_link_nlri(&rec_link_nlri.u.link_nlri, local_node, remote_node, *peer_addr_v6,
+	                        0, 1, spf_status, seq_num, ifindex);
+
+	/* Check if this NLRI already exists in database */
+	struct tvr_link_nlri* existing_nlri = lnlri_rb_find(&peer->bgp->db->lnlri_rb_root,
+	                                                    &rec_link_nlri.u.link_nlri);
+
+	/* Determine if we should process this NLRI */
+	if (should_process_nlri(existing_nlri, seq_num, spf_status)) {
+		/* Process Link NLRI */
+		tvr_db_process(peer->bgp->db, &rec_link_nlri, false);
+
+		/* Create and process corresponding Node NLRIs */
+		struct tvr_nlri local_node_nlri, remote_node_nlri;
+
+		local_node_nlri.type = NODE;
+		remote_node_nlri.type = NODE;
+
+		tvr_db_assign_node_nlri(&local_node_nlri.u.node_nlri, local_node, 0, 0, seq_num);
+		tvr_db_assign_node_nlri(&remote_node_nlri.u.node_nlri, remote_node, 0, 0, seq_num);
+
+		tvr_db_process(peer->bgp->db, &local_node_nlri, false);
+		tvr_db_process(peer->bgp->db, &remote_node_nlri, false);
+
+		/* Forward to other peers if needed */
+		bgp_forward_tlv_link_to_peers(peer, &rec_link_nlri.u.link_nlri);
+
+		return 1;  /* Updated */
+	}
+
+	return 0;  /* No update needed */
+}
+
+/* Function to forward TLV Link NLRI to other established peers */
+static void bgp_forward_tlv_link_to_peers(struct peer *source_peer, struct tvr_link_nlri *link_nlri)
+{
+	struct listnode *node, *nnode;
+	struct peer *tmp_peer;
+
+	/* Create TLV packet for single link NLRI */
+	uint8_t packet_data[32];  /* 1 + 3 + 28 = 32 bytes */
+
+	/* Create TLV packet according to define.md specification */
+	size_t packet_size = 0;
+
+	/* TLV count (1 byte) */
+	packet_data[packet_size++] = 1;
+
+	/* TLV header for Link array */
+	packet_data[packet_size++] = 0x02;  /* TLV_TYPE_LINK_ARRAY */
+	packet_data[packet_size++] = 0x00;  /* item_count high byte */
+	packet_data[packet_size++] = 0x01;  /* item_count low byte (1 item) */
+
+	/* Link structure (28 bytes) */
+	write_uint32_be(packet_data + packet_size, link_nlri->local_node);
+	packet_size += 4;
+	write_uint32_be(packet_data + packet_size, link_nlri->remote_node);
+	packet_size += 4;
+	memcpy(packet_data + packet_size, link_nlri->link_addr.s6_addr, 16);
+	packet_size += 16;
+	write_uint32_be(packet_data + packet_size, link_nlri->ifindex);
+	packet_size += 4;
+
+	/* Forward to all established peers except the source */
+	for (ALL_LIST_ELEMENTS(source_peer->bgp->peer, node, nnode, tmp_peer)) {
+		if (tmp_peer->connection->status == Established && tmp_peer != source_peer) {
+			bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, packet_data, packet_size);
+		}
+	}
 }
 
 /**
