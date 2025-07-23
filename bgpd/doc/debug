@@ -1,0 +1,8 @@
+int fp1 = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT| O_APPEND , 0666);
+char debug_buf[512];
+snprintf(batch_buf, sizeof(batch_buf),
+			         "[%s] send establish batch to [%s], batch_size: %zu, remaining: %zu\n",
+			         bgp_router_id_str, target_peer_remote_id_str,
+			         current_batch_size, remaining_count - current_batch_size);
+write(fp1, debug_buf, strlen(debug_buf));
+close(fp1);
