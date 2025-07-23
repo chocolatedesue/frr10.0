@@ -4,6 +4,7 @@
  */
 
 #include <zebra.h>
+#include <fcntl.h>
 #include "tvr_spf.h"
 
 #ifdef GNU_LINUX
@@ -19922,26 +19923,171 @@ DEFPY(sharp_tvrdb_del_prefix_nlri,
 }
 
 
-DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
-	  "tvr spf \
-	  (0-1000000000)$src_node \
-	  (0-1000000000)$time_stamp1 \
-	  (0-1000000000)$time_stamp2 \
-	  (0-1)$is_install_route",
-	  "Time Variant Routing Shortest Path First (SPF)\n")
-{
-	struct bgp* bgp = bgp_get_default();
-	if(bgp->db == NULL) {
-		vty_out(vty, "Database does not exist!\n");
-		return CMD_WARNING;
-	}
+/* TVR SPF execution result structure */
+struct tvr_spf_result {
+	int installed_count;
+	int failed_count;
+	int total_routes;
+	bool zebra_connected;
+	enum {
+		TVR_SPF_SUCCESS = 0,
+		TVR_SPF_NO_DATABASE,
+		TVR_SPF_CREATE_FAILED,
+		TVR_SPF_NO_ZEBRA
+	} status;
+};
 
+/* TVR SPF API function - can be called from other modules without VTY */
+struct tvr_spf_result tvr_spf_execute(struct bgp *bgp,
+				      uint32_t src_node,
+				      uint32_t time_stamp1,
+				      uint32_t time_stamp2,
+				      bool is_install_route,
+				      bool enable_logging)
+{
+	struct tvr_spf_result result = {0};
 	struct tvr_spf *spf;
 	struct tvr_route *route;
-	int installed_count = 0;
-	int failed_count = 0;
+	extern struct zclient *zclient;
 	
-	vty_out(vty, "Running SPF from node %ld with time stamps %ld to %ld",
+	int fp = -1;
+	char debug_buf[512];
+
+	if (enable_logging) {
+		fp = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	}
+
+	if (bgp->db == NULL) {
+		if (enable_logging && fp > 0) {
+			snprintf(debug_buf, sizeof(debug_buf),
+				"[TVR-SPF] Database does not exist for BGP instance\n");
+			write(fp, debug_buf, strlen(debug_buf));
+			close(fp);
+		}
+		result.status = TVR_SPF_NO_DATABASE;
+		return result;
+	}
+
+	if (enable_logging && fp > 0) {
+		snprintf(debug_buf, sizeof(debug_buf),
+			"[TVR-SPF] Running SPF from node %u with time stamps %u to %u%s\n",
+			src_node, time_stamp1, time_stamp2,
+			is_install_route ? " (installing routes)" : "");
+		write(fp, debug_buf, strlen(debug_buf));
+	}
+
+	spf = tvr_spf_create(bgp->db, src_node, time_stamp1, time_stamp2);
+	if (spf == NULL) {
+		if (enable_logging && fp > 0) {
+			snprintf(debug_buf, sizeof(debug_buf),
+				"[TVR-SPF] Failed to create SPF instance\n");
+			write(fp, debug_buf, strlen(debug_buf));
+			close(fp);
+		}
+		result.status = TVR_SPF_CREATE_FAILED;
+		return result;
+	}
+
+	result.zebra_connected = (zclient && zclient->sock > 0);
+
+	frr_each_safe(route_rb, &spf->route_rb_root, route) {
+		struct prefix prefix;
+		prefix.family = AF_INET6;
+		prefix.prefixlen = route->prefixlen;
+		prefix.u.prefix6 = route->prefix;
+		result.total_routes++;
+		
+		if (route->dist < TVR_INF_DIST) {
+			char nexthop_str[INET6_ADDRSTRLEN];
+			inet_ntop(AF_INET6, &route->next_hop, nexthop_str,
+				  sizeof(nexthop_str));
+			
+			if (is_install_route && result.zebra_connected) {
+				int install_result = tvr_spf_install_single_route_v6(zclient, &prefix, 
+							&route->next_hop, VRF_DEFAULT, 
+							ZEBRA_ROUTE_STATIC, (uint32_t)route->dist, route->ifindex);
+				if (install_result > 0) {
+					result.installed_count++;
+					if (enable_logging && fp > 0) {
+						snprintf(debug_buf, sizeof(debug_buf),
+							"[TVR-SPF] ✓ Installed route %pFX dist=%llu nexthop=%s ifindex=%d\n",
+							&prefix, route->dist, nexthop_str, route->ifindex);
+						write(fp, debug_buf, strlen(debug_buf));
+					}
+				} else {
+					result.failed_count++;
+					if (enable_logging && fp > 0) {
+						snprintf(debug_buf, sizeof(debug_buf),
+							"[TVR-SPF] ✗ Failed to install route %pFX dist=%llu nexthop=%s ifindex=%d\n",
+							&prefix, route->dist, nexthop_str, route->ifindex);
+						write(fp, debug_buf, strlen(debug_buf));
+					}
+				}
+			} else {
+				if (enable_logging && fp > 0) {
+					snprintf(debug_buf, sizeof(debug_buf),
+						"[TVR-SPF] Route %pFX reachable dist=%llu nexthop=%s ifindex=%d\n",
+						&prefix, route->dist, nexthop_str, route->ifindex);
+					write(fp, debug_buf, strlen(debug_buf));
+				}
+			}
+		} else {
+			if (is_install_route && result.zebra_connected) {
+				int uninstall_result = tvr_spf_uninstall_single_route(zclient, &prefix,
+									VRF_DEFAULT, ZEBRA_ROUTE_BGP);
+				if (enable_logging && fp > 0) {
+					snprintf(debug_buf, sizeof(debug_buf),
+						"[TVR-SPF] %s unreachable route %pFX\n",
+						(uninstall_result > 0) ? "✓ Uninstalled" : "Route", &prefix);
+					write(fp, debug_buf, strlen(debug_buf));
+				}
+			} else {
+				if (enable_logging && fp > 0) {
+					snprintf(debug_buf, sizeof(debug_buf),
+						"[TVR-SPF] Route %pFX is unreachable\n", &prefix);
+					write(fp, debug_buf, strlen(debug_buf));
+				}
+			}
+		}
+	}
+
+	if (is_install_route && enable_logging && fp > 0) {
+		snprintf(debug_buf, sizeof(debug_buf),
+			"[TVR-SPF] Summary: installed=%d failed=%d total=%d zebra_connected=%s\n",
+			result.installed_count, result.failed_count, result.total_routes,
+			result.zebra_connected ? "yes" : "no");
+		write(fp, debug_buf, strlen(debug_buf));
+	}
+
+	if (enable_logging && fp > 0) {
+		close(fp);
+	}
+
+	tvr_spf_destroy(&spf);
+	result.status = TVR_SPF_SUCCESS;
+	return result;
+}
+
+/* TVR SPF execution with VTY output */
+static struct tvr_spf_result tvr_spf_execute_with_vty(struct vty *vty, 
+						      struct bgp *bgp,
+						      uint32_t src_node,
+						      uint32_t time_stamp1,
+						      uint32_t time_stamp2,
+						      bool is_install_route)
+{
+	struct tvr_spf_result result = {0};
+	struct tvr_spf *spf;
+	struct tvr_route *route;
+	extern struct zclient *zclient;
+
+	if (bgp->db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		result.status = TVR_SPF_NO_DATABASE;
+		return result;
+	}
+
+	vty_out(vty, "Running SPF from node %u with time stamps %u to %u",
 		src_node, time_stamp1, time_stamp2);
 	
 	if (is_install_route) {
@@ -19952,52 +20098,49 @@ DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
 	spf = tvr_spf_create(bgp->db, src_node, time_stamp1, time_stamp2);
 	if (spf == NULL) {
 		vty_out(vty, "Failed to create SPF instance!\n");
-		return CMD_WARNING;
+		result.status = TVR_SPF_CREATE_FAILED;
+		return result;
 	}
 
-	// 获取zclient用于路由安装
-	extern struct zclient *zclient;
+	result.zebra_connected = (zclient && zclient->sock > 0);
 
 	frr_each_safe(route_rb, &spf->route_rb_root, route) {
 		struct prefix prefix;
 		prefix.family = AF_INET6;
 		prefix.prefixlen = route->prefixlen;
 		prefix.u.prefix6 = route->prefix;
+		result.total_routes++;
 		
-		if(route->dist < TVR_INF_DIST) {
+		if (route->dist < TVR_INF_DIST) {
 			char nexthop_str[INET6_ADDRSTRLEN];
 			inet_ntop(AF_INET6, &route->next_hop, nexthop_str,
 				  sizeof(nexthop_str));
 			
-			if (is_install_route && zclient && zclient->sock > 0) {
-				// 使用IPv6格式的单条路由安装函数
-				int result = tvr_spf_install_single_route_v6(zclient, &prefix, 
+			if (is_install_route && result.zebra_connected) {
+				int install_result = tvr_spf_install_single_route_v6(zclient, &prefix, 
 							&route->next_hop, VRF_DEFAULT, 
-							ZEBRA_ROUTE_STATIC, (uint32_t)route->dist, route -> ifindex);
-				if (result > 0) {
-					installed_count++;
+							ZEBRA_ROUTE_STATIC, (uint32_t)route->dist, route->ifindex);
+				if (install_result > 0) {
+					result.installed_count++;
 					vty_out(vty, "✓ Installed route %pFX with distance %llu, nexthop %s, ifindex %d\n",
 						&prefix, route->dist, nexthop_str, route->ifindex);
 				} else {
-					failed_count++;
-					vty_out(vty, "✗ Failed to install route %p,FX with distance %llu, nexthop %s, ifindex %d\n",
-						&prefix, route->dist, nexthop_str,route->ifindex);
+					result.failed_count++;
+					vty_out(vty, "✗ Failed to install route %pFX with distance %llu, nexthop %s, ifindex %d\n",
+						&prefix, route->dist, nexthop_str, route->ifindex);
 				}
 			} else {
 				vty_out(vty, "Route %pFX is reachable with distance %llu, nexthop %s, ifindex %d\n",
-					&prefix, route->dist, nexthop_str, route -> ifindex);
+					&prefix, route->dist, nexthop_str, route->ifindex);
 			}
 		} else {
-			if (is_install_route) {
-				// 对于不可达路由，尝试卸载（如果之前安装过）
-				if (zclient && zclient->sock > 0) {
-					int result = tvr_spf_uninstall_single_route(zclient, &prefix,
-										VRF_DEFAULT, ZEBRA_ROUTE_BGP);
-					if (result > 0) {
-						vty_out(vty, "✓ Uninstalled unreachable route %pFX\n", &prefix);
-					} else {
-						vty_out(vty, "Route %pFX is unreachable (not previously installed)\n", &prefix);
-					}
+			if (is_install_route && result.zebra_connected) {
+				int uninstall_result = tvr_spf_uninstall_single_route(zclient, &prefix,
+									VRF_DEFAULT, ZEBRA_ROUTE_BGP);
+				if (uninstall_result > 0) {
+					vty_out(vty, "✓ Uninstalled unreachable route %pFX\n", &prefix);
+				} else {
+					vty_out(vty, "Route %pFX is unreachable (not previously installed)\n", &prefix);
 				}
 			} else {
 				vty_out(vty, "Route %pFX is unreachable\n", &prefix);
@@ -20007,18 +20150,42 @@ DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
 
 	if (is_install_route) {
 		vty_out(vty, "\nRoute Installation Summary:\n");
-		vty_out(vty, "  Successfully installed: %d routes\n", installed_count);
-		if (failed_count > 0) {
-			vty_out(vty, "  Failed to install: %d routes\n", failed_count);
+		vty_out(vty, "  Successfully installed: %d routes\n", result.installed_count);
+		if (result.failed_count > 0) {
+			vty_out(vty, "  Failed to install: %d routes\n", result.failed_count);
 		}
-		if (!zclient || zclient->sock <= 0) {
+		if (!result.zebra_connected) {
 			vty_out(vty, "  Warning: zebra client not connected\n");
 		}
 	}
 
 	tvr_spf_destroy(&spf);
+	result.status = TVR_SPF_SUCCESS;
+	return result;
+}
 
-	return CMD_SUCCESS;
+DEFPY(sharp_tvr_spf, sharp_tvr_spf_cmd,
+	  "tvr spf \
+	  (0-1000000000)$src_node \
+	  (0-1000000000)$time_stamp1 \
+	  (0-1000000000)$time_stamp2 \
+	  (0-1)$is_install_route",
+	  "Time Variant Routing Shortest Path First (SPF)\n")
+{
+	struct bgp *bgp = bgp_get_default();
+	struct tvr_spf_result result;
+
+	result = tvr_spf_execute_with_vty(vty, bgp, src_node, time_stamp1, 
+					  time_stamp2, is_install_route);
+
+	switch (result.status) {
+	case TVR_SPF_NO_DATABASE:
+	case TVR_SPF_CREATE_FAILED:
+		return CMD_WARNING;
+	case TVR_SPF_SUCCESS:
+	default:
+		return CMD_SUCCESS;
+	}
 }
 
 

@@ -37,6 +37,19 @@ RUN cd /src \
                 --enable-scripting \
                 --enable-numeric-version \
                 --with-pkg-extra-version="_git$PKGVER" \
+                    --disable-ripd \
+                --disable-ripngd \
+                --disable-ospfd \
+                --disable-ospf6d \
+                --disable-ldpd \
+                --disable-isisd \
+                --disable-babeld \
+                --disable-pimd \
+                --disable-nhrpd \
+                    --disable-doc \
+                --enable-snmp=no \
+                --enable-grpc=no \
+        --disable-backtrace \
     && make -j$(nproc) dist
 
 # =============================================================================
