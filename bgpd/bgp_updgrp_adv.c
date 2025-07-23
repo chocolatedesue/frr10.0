@@ -857,7 +857,9 @@ void subgroup_announce_route(struct update_subgroup *subgrp)
 
 	if (SUBGRP_SAFI(subgrp) != SAFI_MPLS_VPN
 	    && SUBGRP_SAFI(subgrp) != SAFI_ENCAP
-	    && SUBGRP_SAFI(subgrp) != SAFI_EVPN)
+	    && SUBGRP_SAFI(subgrp) != SAFI_EVPN
+		&& SUBGRP_SAFI(subgrp) != SAFI_BGP_LINK_STATE
+	)
 		subgroup_announce_table(subgrp, NULL);
 	else
 		for (dest = bgp_table_top(update_subgroup_rib(subgrp)); dest;
