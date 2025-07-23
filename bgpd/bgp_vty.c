@@ -6,6 +6,7 @@
 #include <zebra.h>
 #include <fcntl.h>
 #include "tvr_spf.h"
+#include "tvr_db.h"
 
 #ifdef GNU_LINUX
 #include <linux/rtnetlink.h> //RT_TABLE_XXX
@@ -1834,6 +1835,562 @@ DEFPY (no_bgp_router_id,
 
 	router_id.s_addr = 0;
 	bgp_router_id_static_set(bgp, router_id);
+
+	return CMD_SUCCESS;
+}
+
+/* Custom BGP command example */
+DEFUN (my_custom_bgp,
+       my_custom_bgp_cmd,
+       "my-custom-command WORD",
+       "My custom BGP command\n"
+       "Custom parameter\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	const char *param = argv[1]->arg;
+
+	/* Store the parameter in BGP instance */
+	if (bgp->my_custom_param)
+		XFREE(MTYPE_BGP, bgp->my_custom_param);
+
+	bgp->my_custom_param = XSTRDUP(MTYPE_BGP, param);
+
+	/* Add your custom logic here */
+	vty_out(vty, "Executing custom BGP command with parameter: %s\n", param);
+
+	/* You can access the BGP instance through the 'bgp' variable */
+	/* Example: modify BGP configuration, add custom behavior, etc. */
+
+	return CMD_SUCCESS;
+}
+
+DEFUN (no_my_custom_bgp,
+       no_my_custom_bgp_cmd,
+       "no my-custom-command [WORD]",
+       NO_STR
+       "My custom BGP command\n"
+       "Custom parameter\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+
+	/* Add your custom cleanup logic here */
+	if (bgp->my_custom_param) {
+		XFREE(MTYPE_BGP, bgp->my_custom_param);
+		bgp->my_custom_param = NULL;
+	}
+
+	vty_out(vty, "Removing custom BGP command configuration\n");
+
+	return CMD_SUCCESS;
+}
+
+/* TVR Database Commands */
+DEFUN (bgp_tvrdb_create,
+       bgp_tvrdb_create_cmd,
+       "tvrdb create",
+       "Time Variant Routing Database\n"
+       "Create TVR database\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+
+	if (bgp->db != NULL) {
+		vty_out(vty, "Database already exists!\n");
+		return CMD_WARNING;
+	}
+
+	/* Use TVR database singleton instance */
+	bgp->db = tvr_db_get_instance();
+	if (bgp->db == NULL) {
+		vty_out(vty, "Failed!\n");
+		return CMD_WARNING;
+	}
+
+	bgp->tvr_enabled = true;
+	vty_out(vty, "Succeeded!\n");
+	return CMD_SUCCESS;
+}
+
+DEFUN (bgp_tvrdb_destroy,
+       bgp_tvrdb_destroy_cmd,
+       "tvrdb destroy",
+       "Time Variant Routing Database\n"
+       "Destroy TVR database\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+
+	if (bgp->db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	/* Note: We don't actually destroy the singleton instance, just disconnect from it */
+	bgp->db = NULL;
+	bgp->tvr_enabled = false;
+
+	vty_out(vty, "Succeeded!\n");
+	return CMD_SUCCESS;
+}
+
+DEFUN (bgp_tvrdb_show,
+       bgp_tvrdb_show_cmd,
+       "tvrdb show",
+       "Time Variant Routing Database\n"
+       "Show TVR database information\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+
+	if (bgp->db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	char debug_buf[256];
+	snprintf(debug_buf, sizeof(debug_buf), "tvrdb_show: db=%p, static db=%p, PID=%d\n",
+		bgp->db, tvr_db_get_instance(), getpid());
+	vty_out(vty, "%s", debug_buf);
+
+	tvr_db_show(bgp->db, vty);
+	return CMD_SUCCESS;
+}
+
+DEFUN (bgp_tvrdb_aging,
+       bgp_tvrdb_aging_cmd,
+       "tvrdb aging (0-1000000000)",
+       "Time Variant Routing Database\n"
+       "Aging\n"
+       "Timestamp for aging\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	int idx = 0;
+	uint64_t time_stamp;
+
+	if (bgp->db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	time_stamp = strtoull(argv[idx]->arg, NULL, 10);
+
+	size_t aged_nlri_cnt = tvr_db_aging(bgp->db, time_stamp);
+	vty_out(vty, "%ld NLRI(s) aged!\n", aged_nlri_cnt);
+
+	return CMD_SUCCESS;
+}
+
+DEFUN (bgp_tvrdb_add_node_nlri,
+       bgp_tvrdb_add_node_nlri_cmd,
+       "tvrdb add node-nlri (0-1000000000) (0-1000000000) (0-255) (0-1000000000)",
+       "Time Variant Routing Database\n"
+       "Add entry\n"
+       "Node NLRI\n"
+       "Local node ID\n"
+       "Timestamp\n"
+       "SPF status\n"
+       "Sequence number\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	int idx = 0;
+	uint64_t local_node, time_stamp, seq_num;
+	uint8_t spf_status;
+
+if (bgp->db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	local_node = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	time_stamp = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-255)", &idx);
+	spf_status = (uint8_t)strtoul(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	seq_num = strtoull(argv[idx]->arg, NULL, 10);
+
+	struct tvr_nlri nlri;
+	nlri.type = NODE;
+	nlri.u.node_nlri.local_node = local_node;
+	nlri.u.node_nlri.time_stamp = time_stamp;
+	nlri.u.node_nlri.attr.spf_status = spf_status;
+	nlri.u.node_nlri.attr.seq_num = seq_num;
+
+	bool success = tvr_db_process(bgp->db, &nlri, false);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+	return CMD_SUCCESS;
+}
+
+DEFUN (bgp_tvrdb_del_node_nlri,
+       bgp_tvrdb_del_node_nlri_cmd,
+       "tvrdb delete node-nlri (0-1000000000) (0-1000000000)",
+       "Time Variant Routing Database\n"
+       "Delete entry\n"
+       "Node NLRI\n"
+       "Local node ID\n"
+       "Timestamp\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	int idx = 0;
+	uint64_t local_node, time_stamp;
+
+	if (bgp->db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	local_node = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	time_stamp = strtoull(argv[idx]->arg, NULL, 10);
+
+	struct tvr_nlri nlri;
+	nlri.type = NODE;
+	nlri.u.node_nlri.local_node = local_node;
+	nlri.u.node_nlri.time_stamp = time_stamp;
+
+	bool success = tvr_db_process(bgp->db, &nlri, true);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+	return CMD_SUCCESS;
+}
+
+/* TVR SPF Command */
+DEFUN (bgp_tvr_spf,
+       bgp_tvr_spf_cmd,
+       "tvr spf (0-1000000000) (0-1000000000) (0-1000000000)",
+       "Time Variant Routing\n"
+       "Shortest Path First calculation\n"
+       "Source node ID\n"
+       "Start timestamp\n"
+       "End timestamp\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	int idx = 0;
+	uint32_t src_node;
+	uint64_t time_stamp1, time_stamp2;
+
+	if (bgp->db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	src_node = (uint32_t)strtoul(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	time_stamp1 = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	time_stamp2 = strtoull(argv[idx]->arg, NULL, 10);
+
+	struct tvr_spf *spf;
+	struct tvr_route *route;
+
+	spf = tvr_spf_create(bgp->db, src_node, time_stamp1, time_stamp2);
+	if (spf == NULL) {
+		vty_out(vty, "Failed to create SPF instance!\n");
+		return CMD_WARNING;
+	}
+
+	vty_out(vty, "SPF calculation completed for node %u, time [%llu, %llu]\n",
+		src_node, (unsigned long long)time_stamp1, (unsigned long long)time_stamp2);
+
+	/* Show some results */
+	int route_count = 0;
+	frr_each(route_rb, &spf->route_rb_root, route) {
+		if (route->dist < TVR_INF_DIST) {
+			route_count++;
+		}
+	}
+	vty_out(vty, "Found %d reachable routes\n", route_count);
+
+	tvr_spf_destroy(&spf);
+	return CMD_SUCCESS;
+}
+
+DEFUN (bgp_tvrdb_add_link_nlri,
+       bgp_tvrdb_add_link_nlri_cmd,
+       "tvrdb add link-nlri (0-1000000000) (0-1000000000) X:X::X:X (0-1000000000) (0-1000000000) (0-255) (0-1000000000)",
+       "Time Variant Routing Database\n"
+       "Add entry\n"
+       "Link NLRI\n"
+       "Local node ID\n"
+       "Remote node ID\n"
+       "Link IPv6 address\n"
+       "Timestamp\n"
+       "IGP metric\n"
+       "SPF status\n"
+       "Sequence number\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	int idx = 0;
+	uint64_t local_node, remote_node, time_stamp, igp_metric, seq_num;
+	uint8_t spf_status;
+	struct in6_addr link_addr;
+
+	if (bgp->db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	local_node = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	remote_node = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "X:X::X:X", &idx);
+	inet_pton(AF_INET6, argv[idx]->arg, &link_addr);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	time_stamp = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	igp_metric = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-255)", &idx);
+	spf_status = (uint8_t)strtoul(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	seq_num = strtoull(argv[idx]->arg, NULL, 10);
+
+	struct tvr_nlri nlri;
+	nlri.type = LINK;
+	nlri.u.link_nlri.local_node = local_node;
+	nlri.u.link_nlri.remote_node = remote_node;
+	nlri.u.link_nlri.link_addr = link_addr;
+	nlri.u.link_nlri.time_stamp = time_stamp;
+	nlri.u.link_nlri.attr.igp_metric = (uint32_t)igp_metric;
+	nlri.u.link_nlri.attr.spf_status = spf_status;
+	nlri.u.link_nlri.attr.seq_num = seq_num;
+
+	bool success = tvr_db_process(bgp->db, &nlri, false);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+	return CMD_SUCCESS;
+}
+
+DEFUN (bgp_tvrdb_del_link_nlri,
+       bgp_tvrdb_del_link_nlri_cmd,
+       "tvrdb delete link-nlri (0-1000000000) (0-1000000000) X:X::X:X (0-1000000000)",
+       "Time Variant Routing Database\n"
+       "Delete entry\n"
+       "Link NLRI\n"
+       "Local node ID\n"
+       "Remote node ID\n"
+       "Link IPv6 address\n"
+       "Timestamp\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	int idx = 0;
+	uint64_t local_node, remote_node, time_stamp;
+	struct in6_addr link_addr;
+
+	if (bgp->db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	local_node = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	remote_node = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "X:X::X:X", &idx);
+	inet_pton(AF_INET6, argv[idx]->arg, &link_addr);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	time_stamp = strtoull(argv[idx]->arg, NULL, 10);
+
+	struct tvr_nlri nlri;
+	nlri.type = LINK;
+	nlri.u.link_nlri.local_node = local_node;
+	nlri.u.link_nlri.remote_node = remote_node;
+	nlri.u.link_nlri.link_addr = link_addr;
+	nlri.u.link_nlri.time_stamp = time_stamp;
+
+	bool success = tvr_db_process(bgp->db, &nlri, true);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+	return CMD_SUCCESS;
+}
+
+DEFUN (bgp_tvrdb_add_prefix_nlri,
+       bgp_tvrdb_add_prefix_nlri_cmd,
+       "tvrdb add prefix-nlri (0-1000000000) X:X::X:X/M (0-1000000000) (0-255) (0-1000000000)",
+       "Time Variant Routing Database\n"
+       "Add entry\n"
+       "Prefix NLRI\n"
+       "Local node ID\n"
+       "IPv6 prefix\n"
+       "Timestamp\n"
+       "SPF status\n"
+       "Sequence number\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	int idx = 0;
+	uint64_t local_node, time_stamp, seq_num;
+	uint8_t spf_status;
+	struct prefix_ipv6 *prefix;
+
+	if (bgp->db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	local_node = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "X:X::X:X/M", &idx);
+	struct prefix_ipv6 prefix_v6;
+	str2prefix_ipv6(argv[idx]->arg, &prefix_v6);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	time_stamp = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-255)", &idx);
+	spf_status = (uint8_t)strtoul(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	seq_num = strtoull(argv[idx]->arg, NULL, 10);
+
+	struct tvr_nlri nlri;
+	nlri.type = PREFIX;
+	nlri.u.prefix_nlri.local_node = local_node;
+	nlri.u.prefix_nlri.prefixlen = prefix_v6.prefixlen;
+	nlri.u.prefix_nlri.prefix = prefix_v6.prefix;
+	nlri.u.prefix_nlri.time_stamp = time_stamp;
+	nlri.u.prefix_nlri.attr.spf_status = spf_status;
+	nlri.u.prefix_nlri.attr.seq_num = seq_num;
+
+	bool success = tvr_db_process(bgp->db, &nlri, false);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+	return CMD_SUCCESS;
+}
+
+DEFUN (bgp_tvrdb_del_prefix_nlri,
+       bgp_tvrdb_del_prefix_nlri_cmd,
+       "tvrdb delete prefix-nlri (0-1000000000) X:X::X:X/M (0-1000000000)",
+       "Time Variant Routing Database\n"
+       "Delete entry\n"
+       "Prefix NLRI\n"
+       "Local node ID\n"
+       "IPv6 prefix\n"
+       "Timestamp\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	int idx = 0;
+	uint64_t local_node, time_stamp;
+	struct prefix_ipv6 *prefix;
+
+	if (bgp->db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	local_node = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "X:X::X:X/M", &idx);
+	prefix = (struct prefix_ipv6 *)argv[idx]->arg;
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	time_stamp = strtoull(argv[idx]->arg, NULL, 10);
+
+	struct tvr_nlri nlri;
+	nlri.type = PREFIX;
+	nlri.u.prefix_nlri.local_node = local_node;
+	nlri.u.prefix_nlri.prefixlen = prefix->prefixlen;
+	nlri.u.prefix_nlri.prefix = prefix->prefix;
+	nlri.u.prefix_nlri.time_stamp = time_stamp;
+
+	bool success = tvr_db_process(bgp->db, &nlri, true);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
+
+	return CMD_SUCCESS;
+}
+
+DEFUN (bgp_tvrdb_add_self_prefix_nlri,
+       bgp_tvrdb_add_self_prefix_nlri_cmd,
+       "tvrdb add self-prefix-nlri X:X::X:X/M (0-1000000000) (0-255) (0-1000000000)",
+       "Time Variant Routing Database\n"
+       "Add entry\n"
+       "Self Prefix NLRI (using router-id as local node)\n"
+       "IPv6 prefix\n"
+       "Timestamp\n"
+       "SPF status\n"
+       "Sequence number\n")
+{
+	VTY_DECLVAR_CONTEXT(bgp, bgp);
+	int idx = 0;
+	uint64_t time_stamp, seq_num;
+	uint8_t spf_status;
+	struct prefix_ipv6 prefix_v6;
+
+	if (bgp->db == NULL) {
+		vty_out(vty, "Database does not exist!\n");
+		return CMD_WARNING;
+	}
+
+	if (!bgp->router_id.s_addr) {
+		vty_out(vty, "Router ID not configured!\n");
+		return CMD_WARNING;
+	}
+
+	argv_find(argv, argc, "X:X::X:X/M", &idx);
+	str2prefix_ipv6(argv[idx]->arg, &prefix_v6);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	time_stamp = strtoull(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-255)", &idx);
+	spf_status = (uint8_t)strtoul(argv[idx]->arg, NULL, 10);
+	idx++;
+
+	argv_find(argv, argc, "(0-1000000000)", &idx);
+	seq_num = strtoull(argv[idx]->arg, NULL, 10);
+
+	struct tvr_nlri nlri;
+	nlri.type = PREFIX;
+	nlri.u.prefix_nlri.local_node = (uint64_t)bgp->router_id.s_addr;
+	nlri.u.prefix_nlri.prefixlen = prefix_v6.prefixlen;
+	nlri.u.prefix_nlri.prefix = prefix_v6.prefix;
+	nlri.u.prefix_nlri.time_stamp = time_stamp;
+	nlri.u.prefix_nlri.attr.spf_status = spf_status;
+	nlri.u.prefix_nlri.attr.seq_num = seq_num;
+
+	bool success = tvr_db_process(bgp->db, &nlri, false);
+	vty_out(vty, success ? "Succeeded!\n" : "Failed!\n");
 
 	return CMD_SUCCESS;
 }
@@ -19249,6 +19806,15 @@ int bgp_config_write(struct vty *vty)
 		/* EVPN configuration.  */
 		bgp_config_write_family(vty, bgp, AFI_L2VPN, SAFI_EVPN);
 
+		/* Write custom command configuration */
+		if (bgp->my_custom_param)
+			vty_out(vty, " my-custom-command %s\n", bgp->my_custom_param);
+
+		/* Write TVR configuration */
+		if (bgp->tvr_enabled && bgp->tvr_db) {
+			vty_out(vty, " tvrdb create\n");
+		}
+
 		hook_call(bgp_inst_config_write, bgp, vty);
 
 #ifdef ENABLE_BGP_VNC
@@ -20281,6 +20847,24 @@ void bgp_vty_init(void)
 
 	/* "no router bgp" commands. */
 	install_element(CONFIG_NODE, &no_router_bgp_cmd);
+
+	/* Custom command - add your command here */
+	install_element(BGP_NODE, &my_custom_bgp_cmd);
+	install_element(BGP_NODE, &no_my_custom_bgp_cmd);
+
+	/* TVR Database commands */
+	install_element(BGP_NODE, &bgp_tvrdb_create_cmd);
+	install_element(BGP_NODE, &bgp_tvrdb_destroy_cmd);
+	install_element(BGP_NODE, &bgp_tvrdb_show_cmd);
+	install_element(BGP_NODE, &bgp_tvrdb_aging_cmd);
+	install_element(BGP_NODE, &bgp_tvrdb_add_node_nlri_cmd);
+	install_element(BGP_NODE, &bgp_tvrdb_del_node_nlri_cmd);
+	install_element(BGP_NODE, &bgp_tvrdb_add_link_nlri_cmd);
+	install_element(BGP_NODE, &bgp_tvrdb_del_link_nlri_cmd);
+	install_element(BGP_NODE, &bgp_tvrdb_add_prefix_nlri_cmd);
+	install_element(BGP_NODE, &bgp_tvrdb_del_prefix_nlri_cmd);
+	install_element(BGP_NODE, &bgp_tvrdb_add_self_prefix_nlri_cmd);
+	install_element(BGP_NODE, &bgp_tvr_spf_cmd);
 
 	/* "bgp session-dscp command */
 	install_element(CONFIG_NODE, &bgp_session_dscp_cmd);

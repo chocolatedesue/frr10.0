@@ -829,6 +829,13 @@ struct bgp {
 
 	enum asnotation_mode asnotation;
 
+	/* Custom command parameter storage */
+	char *my_custom_param;
+
+	/* TVR Database related fields */
+	void *tvr_db;                    /* TVR database instance */
+	bool tvr_enabled;                /* TVR functionality enabled */
+
 	QOBJ_FIELDS;
 };
 DECLARE_QOBJ_TYPE(bgp);

@@ -3379,7 +3379,8 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 		return NULL;
 	}
 
-	bgp->db = tvr_db_get_instance();
+	// bgp->db = tvr_db_get_instance();
+	bgp->db = NULL;
 
 
 	bgp->as = *as;
@@ -3417,6 +3418,13 @@ static struct bgp *bgp_create(as_t *as, const char *name,
 	bgp->allow_martian = false;
 	bgp_process_queue_init(bgp);
 	bgp->heuristic_coalesce = true;
+
+	/* Initialize custom command parameter */
+	bgp->my_custom_param = NULL;
+
+	/* Initialize TVR related fields */
+	bgp->tvr_db = NULL;
+	bgp->tvr_enabled = false;
 	bgp->inst_type = inst_type;
 	bgp->vrf_id = (inst_type == BGP_INSTANCE_TYPE_DEFAULT) ? VRF_DEFAULT
 							       : VRF_UNKNOWN;
@@ -4154,6 +4162,15 @@ void bgp_free(struct bgp *bgp)
 	XFREE(MTYPE_BGP_NAME, bgp->name_pretty);
 	XFREE(MTYPE_BGP_NAME, bgp->snmp_stats);
 	XFREE(MTYPE_BGP_CONFED_LIST, bgp->confed_peers);
+
+	/* Free custom command parameter */
+	XFREE(MTYPE_BGP, bgp->my_custom_param);
+
+	/* Cleanup TVR related fields */
+	if (bgp->tvr_db) {
+		/* TODO: Add proper TVR database cleanup when implemented */
+		bgp->tvr_db = NULL;
+	}
 	/* 清理ID生成器 */
 	if (bgp->id_gen) {
 		destroy_simple_id_generator(bgp->id_gen);
