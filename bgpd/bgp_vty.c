@@ -2439,7 +2439,7 @@ DEFUN (bgp_tvrdb_add_self_prefix_nlri,
 			snprintf(debug_buf, sizeof(debug_buf),
 			         "VTY SPF execution failed with status %d for router %u\n",
 			         spf_result.status, src_router_id);
-			int fp = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+			int fp = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT, 0666);
 			if (fp >= 0) {
 				write(fp, debug_buf, strlen(debug_buf));
 				close(fp);

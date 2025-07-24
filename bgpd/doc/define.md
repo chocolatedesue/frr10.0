@@ -72,7 +72,11 @@
 | `local_node_id` | 0 | 4 | `uint32` | 本地节点的ID。 |
 | `remote_node_id`| 4 | 4 | `uint32` | 对端节点的ID。 |
 | `peer_link_local_ipv6`| 8 | 16 | `uint8[16]` | 对端接口的IPv6本地链路地址。 |
-| `ifindex` | 24 | 4 | `uint32` | 本地接口的索引号 (Interface Index)。 |
+| `seq` | 24 | 4 | `uint32` | 该链路信息的状态序列号。 |
+| `spf_status` | 28 | 1 | `uint8` | 该链路参与SPF计算的状态。详见 **5. 字段枚举值**。 |
+| `igp_metric` | 29 | 4 | `uint32` | 该链路的IGP度量值。 |
+| `ifindex` | 33 | 4 | `uint32` | 本地接口的索引号 (Interface Index)。 |
+
 
 #### 4.3. Prefix 结构 (当 `type` = 0x03)
 

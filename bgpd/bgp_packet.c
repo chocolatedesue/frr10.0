@@ -3842,16 +3842,20 @@ static int bgp_process_tlv_link_array(struct peer *peer, struct stream *s, uint1
                                      bool *has_updates, char *debug_info, size_t debug_info_size);
 static int bgp_process_single_link_nlri(struct peer *peer, struct stream *s,
                                        uint32_t local_node, uint32_t remote_node,
-                                       struct in6_addr *peer_addr_v6, uint32_t ifindex);
+                                       struct in6_addr *peer_addr_v6, uint32_t seq, uint8_t spf_status,
+                                       uint32_t igp_metric, uint32_t ifindex,
+                                       struct tvr_link_nlri **updated_links, uint16_t *updated_count);
 static int bgp_process_tlv_prefix_array(struct peer *peer, struct stream *s, uint16_t item_count,
                                        bool *has_updates, char *debug_info, size_t debug_info_size);
 static uint16_t read_uint16_be(struct stream *s);
 static void bgp_log_tlv_processing_result(struct peer *peer, bool has_updates, const char *debug_info);
 static void bgp_forward_tlv_link_to_peers(struct peer *source_peer, struct tvr_link_nlri *link_nlri);
+static void bgp_forward_batch_links_to_peers(struct peer *source_peer, struct tvr_link_nlri **link_nlris, uint16_t count);
 
 int bgp_link_state_receive(struct peer_connection *connection,
 				 struct peer *peer, bgp_size_t size)
 {
+	// return BGP_PACKET_NOOP; // Placeholder for actual implementation
 	return bgp_process_tlv_packet(connection, peer, size);
 }
 
@@ -3936,7 +3940,7 @@ static int bgp_process_tlv_packet(struct peer_connection *connection, struct pee
 		snprintf(debug_buf, sizeof(debug_buf),
 		         "SPF execution failed with status %d for router %u\n",
 		         spf_result.status, src_router_id);
-		int fp = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		int fp = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT, 0666);
 		if (fp >= 0) {
 			write(fp, debug_buf, strlen(debug_buf));
 			close(fp);
@@ -3956,7 +3960,7 @@ static void bgp_log_tlv_processing_result(struct peer *peer, bool has_updates, c
 	inet_ntop(AF_INET, &peer->bgp->router_id.s_addr, local_router_id_str, INET_ADDRSTRLEN);
 	inet_ntop(AF_INET, &peer->remote_id.s_addr, remote_router_id_str, INET_ADDRSTRLEN);
 
-	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	int fp1 = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT, 0666);
 
 	if (has_updates) {
 		snprintf(debug_buf, sizeof(debug_buf),
@@ -3981,8 +3985,12 @@ static int bgp_process_tlv_link_array(struct peer *peer, struct stream *s, uint1
 	uint32_t processed_count = 0;
 	uint32_t updated_count = 0;
 
+	/* Allocate array to collect updated link NLRIs for batch forwarding */
+	struct tvr_link_nlri **updated_links = XCALLOC(MTYPE_TMP, sizeof(struct tvr_link_nlri *) * item_count);
+	uint16_t batch_updated_count = 0;
+
 	for (uint16_t i = 0; i < item_count; i++) {
-		/* Read Link structure (28 bytes according to define.md) */
+		/* Read Link structure (37 bytes according to define.md v1.0) */
 		uint32_t local_node_id = stream_getl(s);     /* 4 bytes */
 		uint32_t remote_node_id = stream_getl(s);    /* 4 bytes */
 
@@ -3990,25 +3998,38 @@ static int bgp_process_tlv_link_array(struct peer *peer, struct stream *s, uint1
 		struct in6_addr peer_addr_v6;
 		stream_get(peer_addr_v6.s6_addr, s, 16);
 
+		uint32_t seq = stream_getl(s);               /* 4 bytes */
+		uint8_t spf_status = stream_getc(s);         /* 1 byte */
+		uint32_t igp_metric = stream_getl(s);        /* 4 bytes */
 		uint32_t ifindex = stream_getl(s);           /* 4 bytes */
 
 		/* Process this link NLRI */
 		int result = bgp_process_single_link_nlri(peer, s, local_node_id, remote_node_id,
-		                                         &peer_addr_v6, ifindex);
+		                                         &peer_addr_v6, seq, spf_status, igp_metric, ifindex,
+		                                         updated_links, &batch_updated_count);
 		if (result > 0) {
 			updated_count++;
 			*has_updates = true;
 		} else if (result < 0) {
+			XFREE(MTYPE_TMP, updated_links);
 			return -1;  /* Error occurred */
 		}
 
 		processed_count++;
 	}
 
+	/* Batch forward all updated links to peers */
+	if (batch_updated_count > 0) {
+		bgp_forward_batch_links_to_peers(peer, updated_links, batch_updated_count);
+	}
+
+	/* Clean up */
+	XFREE(MTYPE_TMP, updated_links);
+
 	/* Update debug info */
 	snprintf(debug_info + strlen(debug_info), debug_info_size - strlen(debug_info),
-	         "Link array (type=0x02, count=%u, processed=%u, updated=%u). ",
-	         item_count, processed_count, updated_count);
+	         "Link array (type=0x02, count=%u, processed=%u, updated=%u, batch_forwarded=%u). ",
+	         item_count, processed_count, updated_count, batch_updated_count);
 
 	return 0;
 }
@@ -4016,25 +4037,78 @@ static int bgp_process_tlv_link_array(struct peer *peer, struct stream *s, uint1
 /* Function to process a single Link NLRI */
 static int bgp_process_single_link_nlri(struct peer *peer, struct stream *s,
                                        uint32_t local_node, uint32_t remote_node,
-                                       struct in6_addr *peer_addr_v6, uint32_t ifindex)
+                                       struct in6_addr *peer_addr_v6, uint32_t seq, uint8_t spf_status,
+                                       uint32_t igp_metric, uint32_t ifindex,
+                                       struct tvr_link_nlri **updated_links, uint16_t *updated_count)
 {
-	/* Generate sequence number for this update */
-	uint64_t seq_num = generate_simple_id(peer->bgp->id_gen);
-	uint8_t spf_status = 0;  /* Default status: enabled */
-
 	/* Create Link NLRI for database lookup */
 	struct tvr_nlri rec_link_nlri;
 	rec_link_nlri.type = LINK;
 
+	/* Use the sequence number and spf_status from the received message */
 	tvr_db_assign_link_nlri(&rec_link_nlri.u.link_nlri, local_node, remote_node, *peer_addr_v6,
-	                        0, 1, spf_status, seq_num, ifindex);
+	                        0, igp_metric, spf_status, seq, ifindex);
 
 	/* Check if this NLRI already exists in database */
 	struct tvr_link_nlri* existing_nlri = lnlri_rb_find(&peer->bgp->db->lnlri_rb_root,
 	                                                    &rec_link_nlri.u.link_nlri);
 
 	/* Determine if we should process this NLRI */
-	if (should_process_nlri(existing_nlri, seq_num, spf_status)) {
+	if (should_process_nlri(existing_nlri, seq, spf_status)) {
+
+		// log the current nlri info and existing info
+		int fp1 = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT, 0666);
+		if (fp1 != -1) {
+			char debug_buf[2048];
+			char local_addr_str[INET6_ADDRSTRLEN];
+			char remote_addr_str[INET6_ADDRSTRLEN];
+			char peer_router_id_str[INET_ADDRSTRLEN];
+			
+			inet_ntop(AF_INET6, peer_addr_v6, local_addr_str, INET6_ADDRSTRLEN);
+			inet_ntop(AF_INET, &peer->remote_id.s_addr, peer_router_id_str, INET_ADDRSTRLEN);
+			
+			// Print Current NLRI information
+			snprintf(debug_buf, sizeof(debug_buf),
+			         "[%s] Process Link NLRI:\n"
+			         "  Current NLRI:\n"
+			         "    local_node=%u\n"
+			         "    remote_node=%u\n"
+			         "    link_addr=%s\n"
+			         "    seq_num=%llu\n"
+			         "    spf_status=%u\n"
+			         "    ifindex=%u\n",
+			         peer_router_id_str,
+			         local_node, remote_node, local_addr_str, seq, spf_status, ifindex);
+			
+			// Print Existing NLRI information
+			if (existing_nlri) {
+				inet_ntop(AF_INET6, &existing_nlri->link_addr, remote_addr_str, INET6_ADDRSTRLEN);
+				snprintf(debug_buf + strlen(debug_buf), sizeof(debug_buf) - strlen(debug_buf),
+				         "  Existing NLRI:\n"
+				         "    local_node=%u\n"
+				         "    remote_node=%u\n"
+				         "    link_addr=%s\n"
+				         "    seq_num=%llu\n"
+				         "    spf_status=%u\n"
+				         "    ifindex=%u\n"
+				         "    timestamp=%llu\n",
+				         existing_nlri->local_node, existing_nlri->remote_node, remote_addr_str,
+				         existing_nlri->attr.seq_num, existing_nlri->attr.spf_status, existing_nlri->ifindex,
+				         existing_nlri->time_stamp);
+			} else {
+				snprintf(debug_buf + strlen(debug_buf), sizeof(debug_buf) - strlen(debug_buf),
+				         "  Existing NLRI: NULL (new NLRI)\n");
+			}
+			
+			// Add separator line
+			snprintf(debug_buf + strlen(debug_buf), sizeof(debug_buf) - strlen(debug_buf),
+			         "  ----------------------------------------\n");
+			
+			write(fp1, debug_buf, strlen(debug_buf));
+			close(fp1);
+		}
+
+
 		/* Process Link NLRI */
 		tvr_db_process(peer->bgp->db, &rec_link_nlri, false);
 
@@ -4044,14 +4118,21 @@ static int bgp_process_single_link_nlri(struct peer *peer, struct stream *s,
 		local_node_nlri.type = NODE;
 		remote_node_nlri.type = NODE;
 
-		tvr_db_assign_node_nlri(&local_node_nlri.u.node_nlri, local_node, 0, 0, seq_num);
-		tvr_db_assign_node_nlri(&remote_node_nlri.u.node_nlri, remote_node, 0, 0, seq_num);
+		tvr_db_assign_node_nlri(&local_node_nlri.u.node_nlri, local_node, 0, 0, seq);
+		tvr_db_assign_node_nlri(&remote_node_nlri.u.node_nlri, remote_node, 0, 0, seq);
 
 		tvr_db_process(peer->bgp->db, &local_node_nlri, false);
 		tvr_db_process(peer->bgp->db, &remote_node_nlri, false);
 
-		/* Forward to other peers if needed */
-		bgp_forward_tlv_link_to_peers(peer, &rec_link_nlri.u.link_nlri);
+		/* Add to batch forwarding list instead of immediate forwarding */
+		if (updated_links && updated_count) {
+			/* Find the updated NLRI in database to get the actual stored copy */
+			struct tvr_link_nlri *stored_nlri = lnlri_rb_find(&peer->bgp->db->lnlri_rb_root, &rec_link_nlri.u.link_nlri);
+			if (stored_nlri) {
+				updated_links[*updated_count] = stored_nlri;
+				(*updated_count)++;
+			}
+		}
 
 		return 1;  /* Updated */
 	}
@@ -4066,7 +4147,7 @@ static void bgp_forward_tlv_link_to_peers(struct peer *source_peer, struct tvr_l
 	struct peer *tmp_peer;
 
 	/* Create TLV packet for single link NLRI */
-	uint8_t packet_data[32];  /* 1 + 3 + 28 = 32 bytes */
+	uint8_t packet_data[41];  /* 1 + 3 + 37 = 41 bytes */
 
 	/* Create TLV packet according to define.md specification */
 	size_t packet_size = 0;
@@ -4079,13 +4160,18 @@ static void bgp_forward_tlv_link_to_peers(struct peer *source_peer, struct tvr_l
 	packet_data[packet_size++] = 0x00;  /* item_count high byte */
 	packet_data[packet_size++] = 0x01;  /* item_count low byte (1 item) */
 
-	/* Link structure (28 bytes) */
+	/* Link structure (37 bytes according to define.md v1.0) */
 	write_uint32_be(packet_data + packet_size, link_nlri->local_node);
 	packet_size += 4;
 	write_uint32_be(packet_data + packet_size, link_nlri->remote_node);
 	packet_size += 4;
 	memcpy(packet_data + packet_size, link_nlri->link_addr.s6_addr, 16);
 	packet_size += 16;
+	write_uint32_be(packet_data + packet_size, link_nlri->attr.seq_num);
+	packet_size += 4;
+	packet_data[packet_size++] = link_nlri->attr.spf_status;
+	write_uint32_be(packet_data + packet_size, link_nlri->attr.igp_metric);
+	packet_size += 4;
 	write_uint32_be(packet_data + packet_size, link_nlri->ifindex);
 	packet_size += 4;
 
@@ -4095,6 +4181,61 @@ static void bgp_forward_tlv_link_to_peers(struct peer *source_peer, struct tvr_l
 			bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, packet_data, packet_size);
 		}
 	}
+}
+
+/* Function to forward batch of TLV Link NLRIs to other established peers */
+static void bgp_forward_batch_links_to_peers(struct peer *source_peer, struct tvr_link_nlri **link_nlris, uint16_t count)
+{
+	struct listnode *node, *nnode;
+	struct peer *tmp_peer;
+
+	if (count == 0) {
+		return;
+	}
+
+	/* Calculate packet size: 1 byte (TLV count) + 3 bytes (TLV header) + count * 37 bytes (link data) */
+	size_t packet_size = 1 + 3 + count * 37;
+	uint8_t *packet_data = XCALLOC(MTYPE_TMP, packet_size);
+
+	/* Build TLV packet according to define.md specification */
+	size_t offset = 0;
+
+	/* TLV count (1 byte) */
+	packet_data[offset++] = 1;
+
+	/* TLV header for Link array */
+	packet_data[offset++] = 0x02;  /* TLV_TYPE_LINK_ARRAY */
+	packet_data[offset++] = (count >> 8) & 0xFF;  /* item_count high byte */
+	packet_data[offset++] = count & 0xFF;         /* item_count low byte */
+
+	/* Add all link structures (37 bytes each according to define.md v1.0) */
+	for (uint16_t i = 0; i < count; i++) {
+		struct tvr_link_nlri *link_nlri = link_nlris[i];
+
+		write_uint32_be(packet_data + offset, link_nlri->local_node);
+		offset += 4;
+		write_uint32_be(packet_data + offset, link_nlri->remote_node);
+		offset += 4;
+		memcpy(packet_data + offset, link_nlri->link_addr.s6_addr, 16);
+		offset += 16;
+		write_uint32_be(packet_data + offset, link_nlri->attr.seq_num);
+		offset += 4;
+		packet_data[offset++] = link_nlri->attr.spf_status;
+		write_uint32_be(packet_data + offset, link_nlri->attr.igp_metric);
+		offset += 4;
+		write_uint32_be(packet_data + offset, link_nlri->ifindex);
+		offset += 4;
+	}
+
+	/* Forward to all established peers except the source */
+	for (ALL_LIST_ELEMENTS(source_peer->bgp->peer, node, nnode, tmp_peer)) {
+		if (tmp_peer->connection->status == Established && tmp_peer != source_peer) {
+			bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, packet_data, packet_size);
+		}
+	}
+
+	/* Clean up */
+	XFREE(MTYPE_TMP, packet_data);
 }
 
 /* Function to process TLV Prefix array according to define.md specification */
@@ -4461,7 +4602,7 @@ static void bgp_write_customize(struct peer_connection *connection,
 	// snprintf(debug_buf, sizeof(debug_buf),
 	// 	 "customize write success, type %d\n",
 	// 	 type);
-	// int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND );
+	// int fp1 = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT| O_APPEND );
 	// int write_n1 = write(fp1, debug_buf, strlen(debug_buf));
 	// close(fp1);
 
@@ -4533,7 +4674,7 @@ void bgp_link_state_send(struct peer_connection *connection,
 		 "[%s] send_custom_bgp_data to [%s], msg_type: %s, data_len: %zu\n",
 		 src_router_id_str, dst_router_id_str,
 		  type_str, data_len);
-	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND , 0666);
+	int fp1 = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT| O_APPEND , 0666);
 	write(fp1, debug_buf, strlen(debug_buf));
 	close(fp1);
 
@@ -4546,7 +4687,7 @@ void bgp_link_state_send(struct peer_connection *connection,
 			 src_router_id_str, dst_router_id_str,
 			 type_str, data_len, BGP_STANDARD_MESSAGE_MAX_PACKET_SIZE);
 		// flog_err(EC_BGP_PKT_, "%s", debug_buf);
-		int fp2 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT| O_APPEND, 0666 );
+		int fp2 = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT| O_APPEND, 0666 );
 		write(fp2, debug_buf, strlen(debug_buf));
 		close(fp2);
 		return;
@@ -4594,7 +4735,7 @@ static void forward_to_peers_optimized(struct peer *source_peer, uint8_t *nlri_d
 		if (tmp_peer == source_peer) continue;  // 不向发送方回传
 
 		// 收集需要转发给该peer的NLRI
-		uint8_t *forward_nlris = malloc(nlri_count * 39);  // 最多这么多
+		uint8_t *forward_nlris = malloc(nlri_count * 37);  // 37 bytes per Link NLRI according to define.md
 		uint64_t forward_count = 0;
 
 		// 直接收集所有已处理的NLRI用于转发
@@ -4603,7 +4744,7 @@ static void forward_to_peers_optimized(struct peer *source_peer, uint8_t *nlri_d
 			if (!nlri_processed[i]) continue;
 
 			// 直接复制原始数据，无需再次判断
-			memcpy(forward_nlris + forward_count * 39, nlri_data + i * 39, 39);
+			memcpy(forward_nlris + forward_count * 37, nlri_data + i * 37, 37);
 			forward_count++;
 		}
 
@@ -4613,7 +4754,7 @@ static void forward_to_peers_optimized(struct peer *source_peer, uint8_t *nlri_d
 			inet_ntop(AF_INET, &source_peer->bgp->router_id.s_addr, local_router_id_str, INET_ADDRSTRLEN);
 			inet_ntop(AF_INET, &tmp_peer->remote_id.s_addr, tmp_peer_router_id_str, INET_ADDRSTRLEN);
 
-			int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+			int fp1 = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT, 0666);
 			char tmp_buf[512];
 			snprintf(tmp_buf, sizeof(tmp_buf),
 			 "[%s] selective forward to [%s], total: %llu, forward: %llu\n",
@@ -4630,15 +4771,15 @@ static void forward_to_peers_optimized(struct peer *source_peer, uint8_t *nlri_d
 			while (remaining_count > 0) {
 				uint64_t current_batch_size = (remaining_count > MAX_BATCH_SIZE) ? MAX_BATCH_SIZE : remaining_count;
 
-				// 创建当前批次的数据包
-				uint8_t *batch_data = malloc(8 + current_batch_size * 39);
+				// 创建当前批次的数据包 - 37 bytes per Link NLRI according to define.md
+				uint8_t *batch_data = malloc(8 + current_batch_size * 37);
 				write_uint64_be(batch_data, current_batch_size);
 
 				// 从forward_nlris复制当前批次的数据
-				memcpy(batch_data + 8, forward_nlris + current_batch_start * 39, current_batch_size * 39);
+				memcpy(batch_data + 8, forward_nlris + current_batch_start * 37, current_batch_size * 37);
 
 				// 发送当前批次
-				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, batch_data, 8 + current_batch_size * 39);
+				bgp_link_state_send(tmp_peer->connection, BGP_MSG_LINK_STATE, batch_data, 8 + current_batch_size * 37);
 
 				free(batch_data);
 

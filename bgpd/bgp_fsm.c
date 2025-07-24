@@ -137,7 +137,7 @@ static size_t create_link_tlv_packet(uint8_t *buffer, uint8_t tlv_count,
 	write_uint16_be(buffer + offset, (uint16_t)nlri_count);  /* item_count */
 	offset += 2;
 
-	/* Write Link structures (28 bytes each according to define.md) */
+	/* Write Link structures (37 bytes each according to define.md) */
 	for (size_t i = 0; i < nlri_count; i++) {
 		struct tvr_link_nlri *link_nlri = link_nlris[i];
 
@@ -152,6 +152,17 @@ static size_t create_link_tlv_packet(uint8_t *buffer, uint8_t tlv_count,
 		/* peer_link_local_ipv6 (16 bytes) */
 		memcpy(buffer + offset, link_nlri->link_addr.s6_addr, 16);
 		offset += 16;
+
+		/* seq (4 bytes) */
+		write_uint32_be(buffer + offset, (uint32_t)link_nlri->attr.seq_num);
+		offset += 4;
+
+		/* spf_status (1 byte) */
+		buffer[offset++] = link_nlri->attr.spf_status;
+
+		/* igp_metric (4 bytes) */
+		write_uint32_be(buffer + offset, link_nlri->attr.igp_metric);
+		offset += 4;
 
 		/* ifindex (4 bytes) */
 		write_uint32_be(buffer + offset, link_nlri->ifindex);
@@ -196,6 +207,39 @@ static size_t create_prefix_tlv_packet(uint8_t *buffer, uint8_t tlv_count,
 
 		/* SPF status (1 byte) */
 		buffer[offset++] = prefix_nlri->attr.spf_status;
+	}
+
+	return offset;
+}
+
+/* Helper function to create TLV packet for Node NLRI according to define.md specification */
+static size_t create_node_tlv_packet(uint8_t *buffer, uint8_t tlv_count,
+                                     struct tvr_node_nlri **node_nlris, size_t nlri_count)
+{
+	size_t offset = 0;
+
+	/* Write TLV count (1 byte) */
+	buffer[offset++] = tlv_count;
+
+	/* Write TLV header for Node array */
+	buffer[offset++] = 0x01;  /* TLV_TYPE_NODE_ARRAY */
+	write_uint16_be(buffer + offset, (uint16_t)nlri_count);  /* item_count */
+	offset += 2;
+
+	/* Write Node structures (9 bytes each according to define.md) */
+	for (size_t i = 0; i < nlri_count; i++) {
+		struct tvr_node_nlri *node_nlri = node_nlris[i];
+
+		/* node_id (4 bytes) */
+		write_uint32_be(buffer + offset, node_nlri->local_node);
+		offset += 4;
+
+		/* spf_status (1 byte) */
+		buffer[offset++] = node_nlri->attr.spf_status;
+
+		/* seq (4 bytes) */
+		write_uint32_be(buffer + offset, (uint32_t)node_nlri->attr.seq_num);
+		offset += 4;
 	}
 
 	return offset;
@@ -3337,7 +3381,7 @@ void bgp_send_link_state_to_established_peers(struct peer *peer)
 	}
 
 	/* Open debug file */
-	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	int fp1 = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT, 0666);
 
 	/* Iterate through all peers in the BGP instance */
 	for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
@@ -3384,8 +3428,8 @@ static void bgp_send_batched_link_state(struct peer *source_peer, struct peer *t
 		size_t current_batch_size = (remaining_count > MAX_BATCH_SIZE) ? MAX_BATCH_SIZE : remaining_count;
 
 		/* Create TLV packet according to define.md specification */
-		/* TLV packet: 1 byte (tlv_count) + 3 bytes (TLV header) + 28 * batch_size bytes (Link data) */
-		size_t packet_size = 1 + 3 + (28 * current_batch_size);
+		/* TLV packet: 1 byte (tlv_count) + 3 bytes (TLV header) + 37 * batch_size bytes (Link data) */
+		size_t packet_size = 1 + 3 + (37 * current_batch_size);
 		uint8_t *batch_data = XCALLOC(MTYPE_TMP, packet_size);
 
 		/* Create array of current batch link NLRIs */
@@ -3491,7 +3535,7 @@ void bgp_send_prefix_state_to_established_peers(struct peer *peer)
 	}
 
 	/* Open debug file */
-	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	int fp1 = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT, 0666);
 
 	/* Iterate through all peers in the BGP instance */
 	for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
@@ -3550,15 +3594,15 @@ static void bgp_send_backward_transition_to_established_peers(struct peer *sourc
 	struct peer *tmp_peer;
 
 	/* Create TLV packet for single link NLRI according to define.md specification */
-	/* Packet size: 1 byte (tlv_count) + 3 bytes (TLV header) + 28 bytes (Link data) */
-	uint8_t packet_data[32];  /* 1 + 3 + 28 = 32 bytes */
+	/* Packet size: 1 byte (tlv_count) + 3 bytes (TLV header) + 37 bytes (Link data) */
+	uint8_t packet_data[41];  /* 1 + 3 + 37 = 41 bytes */
 
 	/* Create array with single link NLRI */
 	struct tvr_link_nlri *single_link[] = { link_nlri };
 	size_t packet_size = create_link_tlv_packet(packet_data, 1, single_link, 1);
 
 	/* Open debug file */
-	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+	int fp1 = open("/var/log/frr/log.log", O_WRONLY | O_APPEND | O_CREAT, 0666);
 
 	/* Get router ID strings for logging */
 	char bgp_router_id_str[INET_ADDRSTRLEN];
