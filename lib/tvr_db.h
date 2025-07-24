@@ -194,6 +194,10 @@ extern bool tvr_db_assign_link_nlri(struct tvr_link_nlri* nlri, uint64_t local_n
 					uint64_t time_stamp, uint32_t igp_metric,
 					uint8_t spf_status, uint64_t seq_num, ifindex_t ifindex) ;
 
+extern bool tvr_db_assign_prefix_nlri(struct tvr_prefix_nlri* nlri, uint64_t local_node,
+					struct in6_addr prefix, uint8_t prefixlen,
+					uint64_t time_stamp, uint8_t spf_status, uint64_t seq_num);
+
 #ifdef __cplusplus
 }
 #endif

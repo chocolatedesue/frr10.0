@@ -408,12 +408,12 @@ bool tvr_db_assign_node_nlri(struct tvr_node_nlri* nlri, uint64_t local_node,
 bool tvr_db_assign_link_nlri(struct tvr_link_nlri* nlri, uint64_t local_node,
 					uint64_t remote_node, struct in6_addr link_addr,
 					uint64_t time_stamp, uint32_t igp_metric,
-					uint8_t spf_status, uint64_t seq_num, ifindex_t ifindex) 
+					uint8_t spf_status, uint64_t seq_num, ifindex_t ifindex)
 {
 	if (nlri == NULL) {
 		return false;
 	}
-	
+
 	nlri->local_node = local_node;
 	nlri->remote_node = remote_node;
 	nlri->link_addr = link_addr;
@@ -423,5 +423,23 @@ bool tvr_db_assign_link_nlri(struct tvr_link_nlri* nlri, uint64_t local_node,
 	nlri->attr.seq_num = seq_num;
 	nlri->ifindex = ifindex;
 
-	return true;							
+	return true;
+}
+
+bool tvr_db_assign_prefix_nlri(struct tvr_prefix_nlri* nlri, uint64_t local_node,
+					struct in6_addr prefix, uint8_t prefixlen,
+					uint64_t time_stamp, uint8_t spf_status, uint64_t seq_num)
+{
+	if (nlri == NULL) {
+		return false;
+	}
+
+	nlri->local_node = local_node;
+	nlri->prefix = prefix;
+	nlri->prefixlen = prefixlen;
+	nlri->time_stamp = time_stamp;
+	nlri->attr.spf_status = spf_status;
+	nlri->attr.seq_num = seq_num;
+
+	return true;
 }

@@ -188,6 +188,7 @@ int bgp_peer_reg_with_nht(struct peer *peer);
 /* TVR Link State functions */
 void bgp_establish_send_link_state_to_peers(struct peer *peer);
 void bgp_send_link_state_to_established_peers(struct peer *peer);
+void bgp_send_prefix_state_to_established_peers(struct peer *peer);
 void bgp_backward_transition_send_link_state_to_peers(struct peer *peer);
 
 #endif /* _QUAGGA_BGP_FSM_H */

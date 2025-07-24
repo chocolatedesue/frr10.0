@@ -123,9 +123,9 @@ static void ipv4_to_ipv6_mapped(struct in6_addr *ipv6_addr, struct in_addr ipv4_
 	memcpy(&ipv6_addr->s6_addr[12], &ipv4_addr, 4);
 }
 
-/* Helper function to create TLV packet according to define.md specification */
-static size_t create_tlv_packet(uint8_t *buffer, uint8_t tlv_count,
-                                struct tvr_link_nlri **link_nlris, size_t nlri_count)
+/* Helper function to create TLV packet for Link NLRI according to define.md specification */
+static size_t create_link_tlv_packet(uint8_t *buffer, uint8_t tlv_count,
+                                     struct tvr_link_nlri **link_nlris, size_t nlri_count)
 {
 	size_t offset = 0;
 
@@ -156,6 +156,46 @@ static size_t create_tlv_packet(uint8_t *buffer, uint8_t tlv_count,
 		/* ifindex (4 bytes) */
 		write_uint32_be(buffer + offset, link_nlri->ifindex);
 		offset += 4;
+	}
+
+	return offset;
+}
+
+/* Helper function to create TLV packet for Prefix NLRI according to define.md specification */
+static size_t create_prefix_tlv_packet(uint8_t *buffer, uint8_t tlv_count,
+                                       struct tvr_prefix_nlri **prefix_nlris, size_t nlri_count)
+{
+	size_t offset = 0;
+
+	/* Write TLV count (1 byte) */
+	buffer[offset++] = tlv_count;
+
+	/* Write TLV header for Prefix array */
+	buffer[offset++] = 0x03;  /* TLV_TYPE_PREFIX_ARRAY */
+	write_uint16_be(buffer + offset, (uint16_t)nlri_count);  /* item_count */
+	offset += 2;
+
+	/* Write each prefix NLRI data (each 26 bytes) */
+	for (size_t i = 0; i < nlri_count; i++) {
+		struct tvr_prefix_nlri *prefix_nlri = prefix_nlris[i];
+
+		/* Local node ID (4 bytes) */
+		write_uint32_be(buffer + offset, (uint32_t)prefix_nlri->local_node);
+		offset += 4;
+
+		/* IPv6 prefix (16 bytes) */
+		memcpy(buffer + offset, prefix_nlri->prefix.s6_addr, 16);
+		offset += 16;
+
+		/* Prefix length (1 byte) */
+		buffer[offset++] = prefix_nlri->prefixlen;
+
+		/* Sequence number (4 bytes) */
+		write_uint32_be(buffer + offset, (uint32_t)prefix_nlri->attr.seq_num);
+		offset += 4;
+
+		/* SPF status (1 byte) */
+		buffer[offset++] = prefix_nlri->attr.spf_status;
 	}
 
 	return offset;
@@ -3258,6 +3298,9 @@ void bgp_establish_send_link_state_to_peers(struct peer *peer)
 	/* Send link state to all established peers */
 	bgp_send_link_state_to_established_peers(peer);
 
+	/* Send prefix state to all established peers */
+	bgp_send_prefix_state_to_established_peers(peer);
+
 	tvr_spf_execute(
 		peer->bgp, src_router_id, 0, 1, 1, 1
 	);
@@ -3266,6 +3309,8 @@ void bgp_establish_send_link_state_to_peers(struct peer *peer)
 /* Forward declarations */
 static void bgp_send_batched_link_state(struct peer *source_peer, struct peer *target_peer,
                                         struct tvr_link_nlri **link_nlris, size_t total_count, int debug_fd);
+static void bgp_send_batched_prefix_state(struct peer *source_peer, struct peer *target_peer,
+                                          struct tvr_prefix_nlri **prefix_nlris, size_t total_count, int debug_fd);
 static void bgp_send_backward_transition_to_established_peers(struct peer *source_peer,
                                                              struct tvr_link_nlri *link_nlri,
                                                              uint64_t seq_id);
@@ -3347,7 +3392,7 @@ static void bgp_send_batched_link_state(struct peer *source_peer, struct peer *t
 		struct tvr_link_nlri **batch_nlris = &link_nlris[current_batch_start];
 
 		/* Create TLV packet */
-		size_t actual_size = create_tlv_packet(batch_data, 1, batch_nlris, current_batch_size);
+		size_t actual_size = create_link_tlv_packet(batch_data, 1, batch_nlris, current_batch_size);
 
 		/* Send current batch */
 		bgp_link_state_send(target_peer->connection, BGP_MSG_LINK_STATE, batch_data, actual_size);
@@ -3368,6 +3413,97 @@ static void bgp_send_batched_link_state(struct peer *source_peer, struct peer *t
 
 		/* Cleanup batch data */
 		XFREE(MTYPE_TMP, batch_data);
+	}
+}
+
+/* Function to send prefix state in batches according to TLV specification */
+static void bgp_send_batched_prefix_state(struct peer *source_peer, struct peer *target_peer,
+                                          struct tvr_prefix_nlri **prefix_nlris, size_t total_count, int debug_fd)
+{
+	const size_t MAX_BATCH_SIZE = 60;
+	size_t remaining_count = total_count;
+	size_t current_batch_start = 0;
+
+	char bgp_router_id_str[INET_ADDRSTRLEN];
+	char target_peer_remote_id_str[INET_ADDRSTRLEN];
+
+	inet_ntop(AF_INET, &source_peer->bgp->router_id.s_addr, bgp_router_id_str,
+	          sizeof(bgp_router_id_str));
+	inet_ntop(AF_INET, &target_peer->remote_id.s_addr, target_peer_remote_id_str,
+	          sizeof(target_peer_remote_id_str));
+
+	while (remaining_count > 0) {
+		/* Calculate current batch size */
+		size_t current_batch_size = (remaining_count > MAX_BATCH_SIZE) ? MAX_BATCH_SIZE : remaining_count;
+
+		/* Create TLV packet according to define.md specification */
+		/* TLV packet: 1 byte (tlv_count) + 3 bytes (TLV header) + 26 * batch_size bytes (Prefix data) */
+		size_t packet_size = 1 + 3 + (26 * current_batch_size);
+		uint8_t *batch_data = XCALLOC(MTYPE_TMP, packet_size);
+
+		/* Create array of current batch prefix NLRIs */
+		struct tvr_prefix_nlri **batch_nlris = &prefix_nlris[current_batch_start];
+
+		/* Create TLV packet */
+		size_t actual_size = create_prefix_tlv_packet(batch_data, 1, batch_nlris, current_batch_size);
+
+		/* Send current batch */
+		bgp_link_state_send(target_peer->connection, BGP_MSG_LINK_STATE, batch_data, actual_size);
+
+		/* Log batch sending info */
+		if (debug_fd != -1) {
+			char batch_buf[256];
+			snprintf(batch_buf, sizeof(batch_buf),
+			         "[%s] send establish prefix batch to [%s], batch_size: %zu, remaining: %zu\n",
+			         bgp_router_id_str, target_peer_remote_id_str,
+			         current_batch_size, remaining_count - current_batch_size);
+			write(debug_fd, batch_buf, strlen(batch_buf));
+		}
+
+		/* Update counters */
+		current_batch_start += current_batch_size;
+		remaining_count -= current_batch_size;
+
+		/* Cleanup batch data */
+		XFREE(MTYPE_TMP, batch_data);
+	}
+}
+
+/* Function to send prefix state to all established peers with batching */
+void bgp_send_prefix_state_to_established_peers(struct peer *peer)
+{
+	struct listnode *node, *nnode;
+	struct peer *tmp_peer;
+	const uint64_t prefix_nlri_len = pnlri_rb_count(&peer->bgp->db->pnlri_rb_root);
+
+	if (prefix_nlri_len == 0) {
+		return;  /* No prefix NLRIs to send */
+	}
+
+	/* Collect all prefix NLRIs into an array for easier processing */
+	struct tvr_prefix_nlri **prefix_nlris = XCALLOC(MTYPE_TMP,
+	                                                sizeof(struct tvr_prefix_nlri *) * prefix_nlri_len);
+	struct tvr_prefix_nlri *prefix_nlri;
+	size_t idx = 0;
+
+	frr_each_safe(pnlri_rb, &peer->bgp->db->pnlri_rb_root, prefix_nlri) {
+		prefix_nlris[idx++] = prefix_nlri;
+	}
+
+	/* Open debug file */
+	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
+
+	/* Iterate through all peers in the BGP instance */
+	for (ALL_LIST_ELEMENTS(peer->bgp->peer, node, nnode, tmp_peer)) {
+		if (tmp_peer->connection->status == Established) {
+			bgp_send_batched_prefix_state(peer, tmp_peer, prefix_nlris, prefix_nlri_len, fp1);
+		}
+	}
+
+	/* Cleanup */
+	XFREE(MTYPE_TMP, prefix_nlris);
+	if (fp1 != -1) {
+		close(fp1);
 	}
 }
 
@@ -3419,7 +3555,7 @@ static void bgp_send_backward_transition_to_established_peers(struct peer *sourc
 
 	/* Create array with single link NLRI */
 	struct tvr_link_nlri *single_link[] = { link_nlri };
-	size_t packet_size = create_tlv_packet(packet_data, 1, single_link, 1);
+	size_t packet_size = create_link_tlv_packet(packet_data, 1, single_link, 1);
 
 	/* Open debug file */
 	int fp1 = open("/var/log/frr/test.txt", O_WRONLY | O_APPEND | O_CREAT, 0666);
