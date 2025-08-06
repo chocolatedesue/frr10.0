@@ -1,0 +1,200 @@
+# syntax=docker/dockerfile:1
+
+# =============================================================================
+# FRR 超快速构建 Dockerfile (优化版)
+# 优化策略:
+# 1. 使用优化的基础镜像
+# 2. 并行构建和缓存挂载
+# 3. 智能配置选项
+# 4. 最小化运行时镜像
+# 5. 多架构支持
+# =============================================================================
+
+# 构建参数
+ARG BASE_BUILD_IMAGE=frr-buildbase-optimized:latest
+ARG TARGETARCH=amd64
+ARG BUILDARCH=amd64
+
+# =============================================================================
+# 优化的FRR源码构建阶段
+# 使用ccache和并行构建加速编译
+# =============================================================================
+FROM ${BASE_BUILD_IMAGE} AS frr-source-builder-optimized
+
+# 复制源码 (使用.dockerignore优化)
+COPY . /src/
+
+# 构建参数
+ARG PKGVER
+ARG BUILD_TYPE=Release
+ARG ENABLE_PROTOCOLS="bgpd zebra staticd bfdd"
+
+# 设置工作目录
+WORKDIR /src
+
+# 优化的配置和构建
+RUN --mount=type=cache,target=/var/cache/ccache \
+    --mount=type=cache,target=/src/.git \
+    set -ex \
+    # 生成构建系统
+    && ./bootstrap.sh \
+    # 智能配置 - 只启用需要的协议
+    && ./configure \
+        --prefix=/usr \
+        --sysconfdir=/etc \
+        --localstatedir=/var \
+        --sbindir=/usr/lib/frr \
+        --libdir=/usr/lib \
+        --enable-sharpd \
+        --enable-multipath=64 \
+        --enable-user=frr \
+        --enable-group=frr \
+        --enable-vty-group=frrvty \
+        --enable-scripting \
+        --enable-numeric-version \
+        --with-pkg-extra-version="_git$PKGVER" \
+        --disable-dependency-tracking \
+        --disable-doc \
+        --enable-rpki \
+        --enable-vtysh \
+        # 根据需要启用/禁用协议 (减少构建时间)
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "ripd" || echo "--disable-ripd") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "ripngd" || echo "--disable-ripngd") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "ospfd" || echo "--disable-ospfd") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "ospf6d" || echo "--disable-ospf6d") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "ldpd" || echo "--disable-ldpd") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "nhrpd" || echo "--disable-nhrpd") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "eigrpd" || echo "--disable-eigrpd") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "babeld" || echo "--disable-babeld") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "isisd" || echo "--disable-isisd") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "pimd" || echo "--disable-pimd") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "pim6d" || echo "--disable-pim6d") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "pbrd" || echo "--disable-pbrd") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "fabricd" || echo "--disable-fabricd") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "vrrpd" || echo "--disable-vrrpd") \
+        $(echo "$ENABLE_PROTOCOLS" | grep -q "pathd" || echo "--disable-pathd") \
+        --enable-snmp=no \
+        --enable-grpc=no \
+    # 并行构建源码分发包
+    && make -j$(nproc) dist \
+    # 显示ccache统计
+    && ccache --show-stats
+
+# =============================================================================
+# 优化的APK构建阶段
+# 复用构建工具，避免重复安装
+# =============================================================================
+FROM ${BASE_BUILD_IMAGE} AS frr-apk-builder-optimized
+
+# APK构建工具已在基础镜像中安装，直接使用
+USER builder
+
+# 复制源码分发包和构建脚本
+COPY --from=frr-source-builder-optimized --chown=builder:abuild /src/frr-*.tar.gz /dist/
+COPY --from=frr-source-builder-optimized --chown=builder:abuild /src/alpine/ /dist/
+
+# 快速构建APK包
+RUN --mount=type=cache,target=/home/builder/.cache \
+    cd /dist \
+    && abuild checksum \
+    && git init \
+    && MAKEFLAGS="-j$(nproc)" abuild -r -P /pkgs/apk -K
+
+# =============================================================================
+# 最小化运行时镜像
+# 只包含必要的运行时依赖
+# =============================================================================
+FROM alpine:3.20 AS frr-runtime-minimal
+
+# 安装最小运行时依赖
+RUN --mount=type=cache,target=/var/cache/apk \
+    apk add --no-cache --update-cache \
+        tini \
+        # FRR运行时依赖
+        json-c c-ares iproute2 python3 bash \
+        # 基础网络工具
+        iperf3 mtr \
+        # 容器优化工具
+        su-exec
+
+# 创建FRR用户和目录
+RUN addgroup -g 92 frr \
+    && adduser -D -G frr -s /bin/false -u 92 frr \
+    && addgroup frrvty \
+    && adduser frr frrvty \
+    && mkdir -p /etc/frr /var/run/frr /var/log/frr \
+    && chown -R frr:frr /etc/frr /var/run/frr /var/log/frr
+
+# 安装FRR包
+COPY --from=frr-apk-builder-optimized /pkgs/apk/ /tmp/pkgs/
+RUN --mount=type=cache,target=/var/cache/apk \
+    apk add --no-cache --allow-untrusted /tmp/pkgs/*/*.apk \
+    && rm -rf /tmp/pkgs
+
+# 复制启动脚本
+COPY docker/alpine/docker-start /usr/lib/frr/docker-start
+RUN chmod +x /usr/lib/frr/docker-start
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD vtysh -c "show version" || exit 1
+
+# 运行时配置
+EXPOSE 179 2601 2605
+VOLUME ["/etc/frr", "/var/log/frr"]
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["/usr/lib/frr/docker-start"]
+
+# 标签
+LABEL description="Optimized FRR Runtime Image"
+LABEL version="2.0"
+LABEL protocols="${ENABLE_PROTOCOLS:-all}"
+
+# =============================================================================
+# 完整功能运行时镜像 (可选)
+# 包含所有协议和调试工具
+# =============================================================================
+FROM frr-runtime-minimal AS frr-runtime-full
+
+# 添加额外的网络和调试工具
+RUN --mount=type=cache,target=/var/cache/apk \
+    apk add --no-cache \
+        # 网络调试工具
+        tcpdump nmap-ncat \
+        # 系统监控工具
+        htop iotop \
+        # 网络测试工具
+        curl wget \
+        # 文本处理工具
+        jq yq \
+        # 开发调试工具
+        gdb strace
+
+LABEL description="FRR Runtime Image with full toolset"
+LABEL version="2.0-full"
+
+# =============================================================================
+# 开发调试镜像 (可选)
+# 包含源码和开发工具
+# =============================================================================
+FROM frr-runtime-full AS frr-development
+
+# 安装开发工具
+RUN --mount=type=cache,target=/var/cache/apk \
+    apk add --no-cache \
+        # 编译工具
+        gcc g++ make cmake \
+        # 开发库
+        json-c-dev c-ares-dev \
+        # 编辑器
+        vim nano \
+        # 版本控制
+        git
+
+# 复制源码 (用于调试)
+COPY --from=frr-source-builder-optimized /src/ /usr/src/frr/
+RUN chown -R frr:frr /usr/src/frr
+
+LABEL description="FRR Development Image with source code and dev tools"
+LABEL version="2.0-dev"

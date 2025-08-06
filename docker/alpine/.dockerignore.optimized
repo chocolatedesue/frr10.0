@@ -1,0 +1,163 @@
+# =============================================================================
+# Docker构建上下文优化 - .dockerignore
+# 排除不必要的文件以加速构建
+# =============================================================================
+
+# Git相关文件 (保留.git用于版本信息)
+.gitignore
+.gitmodules
+.github/
+
+# 构建产物和缓存
+*.o
+*.lo
+*.la
+*.so
+*.so.*
+*.a
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.deb
+*.rpm
+*.apk
+build/
+.libs/
+autom4te.cache/
+config.log
+config.status
+Makefile
+libtool
+stamp-h1
+
+# 编辑器和IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 测试和覆盖率文件
+*.gcno
+*.gcda
+*.gcov
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# 文档构建产物
+doc/_build/
+doc/html/
+doc/latex/
+*.pdf
+*.ps
+*.dvi
+
+# Python相关
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+.eggs/
+
+# 临时文件
+*.tmp
+*.temp
+*.log
+*.pid
+*.lock
+core
+core.*
+
+# 容器相关 (排除当前目录的其他Dockerfile)
+docker/*/Dockerfile.old
+docker/*/Dockerfile.backup
+docker/*/*.log
+
+# 测试和示例配置
+tests/
+examples/
+samples/
+topotests/
+
+# 开发工具配置
+.clang-format
+.clang-tidy
+.editorconfig
+.pre-commit-config.yaml
+
+# CI/CD文件 (保留必要的)
+.travis.yml
+.circleci/
+.gitlab-ci.yml
+appveyor.yml
+
+# 包管理器文件
+node_modules/
+package-lock.json
+yarn.lock
+
+# 大型二进制文件
+*.bin
+*.exe
+*.dll
+*.dylib
+
+# 备份文件
+*.bak
+*.backup
+*.orig
+
+# 压缩文件
+*.zip
+*.rar
+*.7z
+
+# 媒体文件
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+
+# 特定于项目的排除
+# (根据FRR项目特点添加)
+zebra/zebra
+bgpd/bgpd
+ospfd/ospfd
+ospf6d/ospf6d
+ripd/ripd
+ripngd/ripngd
+isisd/isisd
+pimd/pimd
+ldpd/ldpd
+nhrpd/nhrpd
+eigrpd/eigrpd
+babeld/babeld
+sharpd/sharpd
+pbrd/pbrd
+staticd/staticd
+bfdd/bfdd
+fabricd/fabricd
+vrrpd/vrrpd
+pathd/pathd
+vtysh/vtysh
+watchfrr/watchfrr
+frrcommon.sh
+tools/frr
+tools/frrcommon.sh.in
+
+# 保留重要文件 (使用!前缀)
+!docker/alpine/Dockerfile.buildbase.optimized
+!docker/alpine/Dockerfile.fast.optimized
+!docker/alpine/build-optimized.sh
+!docker/alpine/docker-start
+!docker/alpine/libyang/
+!alpine/APKBUILD.in
+!alpine/frr.*

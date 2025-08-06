@@ -1,0 +1,141 @@
+# syntax=docker/dockerfile:1
+
+# =============================================================================
+# FRR Optimized Build Base Image
+# 优化策略:
+# 1. 合并RUN指令减少层数
+# 2. 优化包管理器缓存
+# 3. 并行构建libyang
+# 4. 预安装所有构建依赖
+# 5. 使用BuildKit缓存挂载
+# =============================================================================
+
+# =============================================================================
+# 优化的Alpine基础构建环境
+# 一次性安装所有构建工具和依赖
+# =============================================================================
+FROM alpine:3.20 AS alpine-builder-optimized
+
+# 使用BuildKit缓存挂载优化包管理
+RUN --mount=type=cache,target=/var/cache/apk \
+    --mount=type=cache,target=/etc/apk/cache \
+    apk add --update-cache \
+        # APK构建工具
+        abuild alpine-conf alpine-sdk doas \
+        # libyang构建依赖
+        bison cmake cmocka-dev flex pcre2-dev \
+        # FRR核心构建依赖 (提前安装)
+        ncurses-dev net-snmp-dev gawk texinfo perl \
+        acct autoconf automake bash binutils bison bsd-compat-headers build-base \
+        c-ares c-ares-dev ca-certificates curl \
+        json-c-dev kmod libcap-dev libtool \
+        linux-headers make musl-dev \
+        pcre2-dev python3-dev readline-dev \
+        rtrlib rtrlib-dev protobuf-c-compiler protobuf-c-dev \
+        lua5.3-dev lua5.3 gzip git \
+    && setup-apkcache /var/cache/apk \
+    && mkdir -p /pkgs/apk /src \
+    && echo 'builder ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers \
+    && echo 'permit nopass builder' >> /etc/doas.d/doas.conf \
+    && adduser -D -G abuild builder \
+    && su builder -c 'abuild-keygen -a -i -n'
+
+# =============================================================================
+# 优化的libyang构建阶段
+# 使用缓存挂载和并行构建
+# =============================================================================
+FROM alpine-builder-optimized AS libyang-builder-optimized
+
+# 复制libyang源码和补丁
+COPY docker/alpine/libyang/ /src/libyang/
+RUN chown -R builder /pkgs /src
+
+# 并行构建libyang
+USER builder
+RUN --mount=type=cache,target=/home/builder/.cache \
+    cd /src/libyang \
+    && abuild checksum \
+    && git init \
+    && MAKEFLAGS="-j$(nproc)" abuild -r -P /pkgs/apk -K
+
+# =============================================================================
+# 优化的FRR构建基础镜像
+# 预安装所有依赖，优化层缓存
+# =============================================================================
+FROM alpine:3.20 AS frr-buildbase-optimized
+
+# 一次性设置所有目录和复制文件
+RUN mkdir -p /src/alpine /pkgs/apk /var/cache/apk
+
+# 复制APKBUILD模板和libyang包
+COPY alpine/APKBUILD.in /src/alpine/
+COPY --from=libyang-builder-optimized /pkgs/apk/ /pkgs/apk/
+
+# 使用缓存挂载安装所有依赖
+RUN --mount=type=cache,target=/var/cache/apk \
+    --mount=type=cache,target=/etc/apk/cache \
+    # 安装libyang包
+    cd /pkgs/apk && apk add --allow-untrusted */*.apk \
+    && source /src/alpine/APKBUILD.in \
+    && apk add --no-cache --update-cache $makedepends \
+    # 预安装常用工具以加速后续构建
+    && apk add --no-cache \
+        ccache \
+        ninja \
+        mold \
+        # 网络工具 (用于测试)
+        iperf3 mtr \
+        # 调试工具
+        gdb strace \
+    # 清理包文件但保留已安装的包
+    && rm -rf /pkgs/apk
+
+# 设置ccache以加速重复构建
+ENV CCACHE_DIR=/var/cache/ccache
+ENV CC="ccache gcc"
+ENV CXX="ccache g++"
+RUN --mount=type=cache,target=/var/cache/ccache \
+    mkdir -p /var/cache/ccache \
+    && ccache --set-config=max_size=2G \
+    && ccache --set-config=compression=true
+
+# 预创建FRR相关目录
+RUN mkdir -p /src /etc/frr /var/run/frr /var/log/frr \
+    && addgroup -g 92 frr \
+    && adduser -D -G frr -s /bin/false -u 92 frr \
+    && addgroup frrvty \
+    && adduser frr frrvty
+
+# 设置构建环境变量
+ENV MAKEFLAGS="-j$(nproc)"
+ENV NINJA_STATUS="[%f/%t %o/sec] "
+
+# 标签信息
+LABEL description="Optimized FRR Build Base Image with libyang and all dependencies"
+LABEL version="2.0"
+LABEL maintainer="FRR Development Team"
+LABEL optimization="ccache,ninja,parallel-build,cache-mounts"
+
+# =============================================================================
+# 开发者友好的构建基础镜像 (可选)
+# 包含额外的开发工具
+# =============================================================================
+FROM frr-buildbase-optimized AS frr-buildbase-dev
+
+RUN --mount=type=cache,target=/var/cache/apk \
+    apk add --no-cache \
+        # 代码分析工具
+        cppcheck clang-analyzer \
+        # 文档生成工具
+        py3-sphinx doxygen graphviz \
+        # 测试工具
+        pytest py3-setuptools \
+        # 编辑器和工具
+        vim nano htop \
+        # 网络调试工具
+        tcpdump wireshark-common \
+        # 性能分析工具
+        perf valgrind
+
+LABEL description="FRR Development Build Base with additional dev tools"
+LABEL version="2.0-dev"

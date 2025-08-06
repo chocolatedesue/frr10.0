@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1
+
+# =============================================================================
+# FRR Build Base Image
+# This base image contains libyang and all build dependencies for FRR
+# Use this to accelerate FRR builds by avoiding dependency installation
+# =============================================================================
+
+# =============================================================================
+# Base Alpine Builder Stage
+# Sets up the basic environment for building APK packages
+# =============================================================================
+FROM alpine:3.20 AS alpine-builder
+
+# Install build dependencies and configure system
+RUN apk add \
+    --update-cache \
+    abuild \
+    alpine-conf \
+    alpine-sdk \
+    doas \
+    && setup-apkcache /var/cache/apk \
+    && mkdir -p /pkgs/apk \
+    && echo 'builder ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers \
+    && echo 'permit nopass builder' >> /etc/doas.d/doas.conf
+
+# Create builder user and generate signing keys
+RUN adduser -D -G abuild builder
+
+# Generate and install signing keys automatically
+RUN su builder -c 'abuild-keygen -a -i -n'
+
+# =============================================================================
+# libyang APK Builder Stage
+# Builds the libyang library as a dependency for FRR
+# =============================================================================
+FROM alpine-builder AS libyang-builder
+
+# Set up libyang source
+RUN mkdir -p /src/libyang
+COPY docker/alpine/libyang/APKBUILD /src/libyang
+RUN chown -R builder /pkgs /src
+
+# Build libyang APK
+USER builder
+RUN cd /src/libyang \
+    && abuild checksum \
+    && git init \
+    && abuild -r -P /pkgs/apk -K
+
+# =============================================================================
+# FRR Build Base Image
+# Creates base image with libyang and build dependencies pre-installed
+# =============================================================================
+FROM alpine:3.20
+
+# Prepare directories
+RUN mkdir -p /src/alpine /pkgs/apk
+
+# Copy APKBUILD template and libyang packages
+COPY alpine/APKBUILD.in /src/alpine
+COPY --from=libyang-builder /pkgs/apk/src /pkgs/apk
+
+# Install libyang packages
+RUN cd /pkgs/apk && apk add --allow-untrusted */*.apk
+
+# Install build dependencies from APKBUILD.in
+RUN source /src/alpine/APKBUILD.in \
+    && apk add \
+        --no-cache \
+        --update-cache \
+        $makedepends
+
+# Clean up package files but keep the packages installed
+RUN rm -rf /pkgs/apk
+
+# Set up base directories for FRR source
+RUN mkdir -p /src
+
+# Label the image for identification
+LABEL description="FRR Build Base Image with libyang and build dependencies"
+LABEL version="1.0"
+LABEL maintainer="FRR Development Team"
